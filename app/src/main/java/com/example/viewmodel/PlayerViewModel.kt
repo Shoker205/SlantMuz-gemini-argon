@@ -16,6 +16,7 @@ import com.example.data.remote.LyricsRepository
 import com.example.domain.AlbumSummary
 import com.example.domain.ArtistBioInfo
 import com.example.domain.ArtistProfile
+import com.example.domain.ArtistSuggestion
 import com.example.domain.DspState
 import com.example.domain.EqualizerPreset
 import com.example.domain.LrcParser
@@ -147,6 +148,15 @@ class PlayerViewModel(
     private val _selectedArtistProfile = MutableStateFlow<ArtistProfile?>(null)
     val selectedArtistProfile: StateFlow<ArtistProfile?> = _selectedArtistProfile.asStateFlow()
 
+    private val _artistAutocompleteSuggestions = MutableStateFlow<List<ArtistSuggestion>>(emptyList())
+    val artistAutocompleteSuggestions: StateFlow<List<ArtistSuggestion>> = _artistAutocompleteSuggestions.asStateFlow()
+
+    private val _isArtistSuggestLoading = MutableStateFlow(false)
+    val isArtistSuggestLoading: StateFlow<Boolean> = _isArtistSuggestLoading.asStateFlow()
+
+    private val _artistArtworksMap = MutableStateFlow<Map<String, String>>(emptyMap())
+    val artistArtworksMap: StateFlow<Map<String, String>> = _artistArtworksMap.asStateFlow()
+
     /**
      * Live reactive Musical DNA summary computed from pre-configured preferences,
      * liked tracks, user playlists, liked artists, liked albums, and listening history.
@@ -173,12 +183,16 @@ class PlayerViewModel(
     )
 
     private var searchDebounceJob: Job? = null
+    private var artistSuggestDebounceJob: Job? = null
     private var waveGenerationJob: Job? = null
 
     init {
         playerController.attachResolvers(
             resolver = { provider, rawUrl, track ->
                 musicRepository.resolvePlayableUrl(provider, rawUrl, track)
+            },
+            prefetcher = { track ->
+                musicRepository.prefetchTrackStream(track)
             },
             onTrackPlayed = { track ->
                 musicRepository.recordPlaybackInHistory(track)
@@ -192,12 +206,16 @@ class PlayerViewModel(
                 playerController.audioEffectsManager.applyDspState(settings.dspState)
                 _likedArtistNames.value = settings.tasteProfile.selectedArtists
                 _dislikedTrackIds.value = settings.dislikedTrackIds
+                if (settings.tasteProfile.artistArtworks.isNotEmpty()) {
+                    _artistArtworksMap.value = _artistArtworksMap.value + settings.tasteProfile.artistArtworks
+                }
             }
         }
 
         refreshExploreFeed()
         scanLocalDeviceAudio()
         refreshExoCacheSize()
+        preloadArtistArtworksInBackground()
     }
 
     private fun currentPlaylistDomainTracks(): List<Track> {
@@ -237,11 +255,144 @@ class PlayerViewModel(
 
     fun saveUserTasteProfile(profile: UserTasteProfile, launchWaveImmediately: Boolean = false) {
         viewModelScope.launch {
-            preferencesRepository.saveTasteProfile(profile.copy(isOnboardingCompleted = true))
-            _likedArtistNames.value = profile.selectedArtists
+            val mergedArtworks = _artistArtworksMap.value + profile.artistArtworks
+            val enrichedProfile = profile.copy(
+                isOnboardingCompleted = true,
+                artistArtworks = mergedArtworks
+            )
+            preferencesRepository.saveTasteProfile(enrichedProfile)
+            _likedArtistNames.value = enrichedProfile.selectedArtists
+            _artistArtworksMap.value = mergedArtworks
             refreshExploreFeed()
             if (launchWaveImmediately) {
                 launchWave(_waveSettings.value)
+            }
+        }
+    }
+
+    /**
+     * Live autocomplete suggestions with cover art when the user types an artist name in TasteOnboardingSheet.
+     */
+    fun onArtistPreferenceQueryChanged(query: String) {
+        artistSuggestDebounceJob?.cancel()
+        val clean = query.trim()
+        if (clean.isBlank()) {
+            _artistAutocompleteSuggestions.value = emptyList()
+            _isArtistSuggestLoading.value = false
+            return
+        }
+
+        // 1. Instant local matches from starter catalog & user collection (0ms response)
+        val knownArtworks = buildCurrentArtistArtworksMap()
+        val localStarterMatches = SlantWaveEngine.starterArtistsCatalog
+            .filter { seed ->
+                seed.name.contains(clean, ignoreCase = true) ||
+                    TrackDeduplicationEngine.areArtistNamesEquivalent(seed.name, clean)
+            }
+            .map { seed ->
+                ArtistSuggestion(
+                    name = seed.name,
+                    subtitle = seed.subtitle,
+                    artworkUrl = knownArtworks[seed.name]
+                        ?: knownArtworks[seed.name.lowercase()].orEmpty(),
+                    genreId = seed.genreId,
+                    isRussian = seed.isRussian
+                )
+            }
+
+        val collectionTracks = favoriteTracks.value + currentPlaylistDomainTracks() + historyTracks.value
+        val localCollectionMatches = collectionTracks
+            .filter { it.artist.contains(clean, ignoreCase = true) && it.artist.length >= 2 }
+            .distinctBy { TrackDeduplicationEngine.normalizeText(it.artist) }
+            .map { t ->
+                val primary = TrackDeduplicationEngine.extractPrimaryArtistName(t.artist)
+                ArtistSuggestion(
+                    name = primary,
+                    subtitle = "В вашей коллекции • ${t.genre}",
+                    artworkUrl = t.artworkUrl.ifBlank { knownArtworks[primary].orEmpty() },
+                    isRussian = SlantWaveEngine.containsCyrillic(primary)
+                )
+            }
+
+        val instantSuggestions = (localStarterMatches + localCollectionMatches)
+            .distinctBy { TrackDeduplicationEngine.normalizeText(it.name) }
+            .take(6)
+
+        _artistAutocompleteSuggestions.value = instantSuggestions
+
+        if (clean.length < 2) {
+            _isArtistSuggestLoading.value = false
+            return
+        }
+
+        // 2. Debounced live API search across Deezer & iTunes for any artist in the world with cover art
+        artistSuggestDebounceJob = viewModelScope.launch {
+            _isArtistSuggestLoading.value = true
+            delay(200L)
+            val remoteSuggestions = runCatching {
+                musicRepository.searchArtistSuggestions(clean, limit = 8)
+            }.getOrDefault(emptyList())
+
+            // Update artworks cache with newly discovered artist covers
+            val newArtworks = remoteSuggestions
+                .filter { it.artworkUrl.isNotBlank() }
+                .associate { it.name to it.artworkUrl }
+            if (newArtworks.isNotEmpty()) {
+                _artistArtworksMap.value = _artistArtworksMap.value + newArtworks
+            }
+
+            val combined = LinkedHashMap<String, ArtistSuggestion>()
+            for (item in (instantSuggestions + remoteSuggestions)) {
+                val norm = TrackDeduplicationEngine.normalizeText(item.name)
+                if (norm.isBlank()) continue
+                val existing = combined[norm]
+                if (existing == null) {
+                    combined[norm] = item
+                } else if (existing.artworkUrl.isBlank() && item.artworkUrl.isNotBlank()) {
+                    combined[norm] = existing.copy(artworkUrl = item.artworkUrl)
+                }
+            }
+            _artistAutocompleteSuggestions.value = combined.values.take(8).toList()
+            _isArtistSuggestLoading.value = false
+        }
+    }
+
+    fun clearArtistAutocompleteSuggestions() {
+        artistSuggestDebounceJob?.cancel()
+        _artistAutocompleteSuggestions.value = emptyList()
+        _isArtistSuggestLoading.value = false
+    }
+
+    private fun buildCurrentArtistArtworksMap(): Map<String, String> {
+        val map = HashMap<String, String>(_artistArtworksMap.value)
+        val allTracks = favoriteTracks.value +
+            currentPlaylistDomainTracks() +
+            historyTracks.value +
+            _exploreFeed.value.personalForYouTracks +
+            _exploreFeed.value.favoriteArtistsTracks +
+            _exploreFeed.value.globalChartTracks
+        for (t in allTracks) {
+            if (t.artworkUrl.isNotBlank()) {
+                val primary = TrackDeduplicationEngine.extractPrimaryArtistName(t.artist)
+                map.putIfAbsent(primary, t.artworkUrl)
+                map.putIfAbsent(primary.lowercase(), t.artworkUrl)
+            }
+        }
+        return map
+    }
+
+    fun preloadArtistArtworksInBackground() {
+        viewModelScope.launch {
+            val seedNames = SlantWaveEngine.starterArtistsCatalog.map { it.name }
+            val userSelected = _likedArtistNames.value + userSettings.value.tasteProfile.selectedArtists
+            val resolved = runCatching {
+                musicRepository.resolveArtistArtworksBatch(
+                    artistNames = (userSelected + seedNames).distinct(),
+                    existingMap = buildCurrentArtistArtworksMap()
+                )
+            }.getOrDefault(emptyMap())
+            if (resolved.isNotEmpty()) {
+                _artistArtworksMap.value = _artistArtworksMap.value + resolved
             }
         }
     }
@@ -376,6 +527,12 @@ class PlayerViewModel(
                 }
             }
 
+            val relatedArtists = runCatching {
+                musicRepository.resolveRelatedArtistsForNames(
+                    (allLikedArtists + tasteDnaSummary.value.topArtists).distinct().take(4)
+                )
+            }.getOrDefault(emptyList())
+
             val rankedWaveQueue = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = basePool,
                 settings = activeSettings,
@@ -384,7 +541,8 @@ class PlayerViewModel(
                 playlistTracks = plTracks,
                 historyTracks = historyTracks.value,
                 likedArtists = allLikedArtists,
-                dislikedTrackIds = _dislikedTrackIds.value
+                dislikedTrackIds = _dislikedTrackIds.value,
+                relatedArtists = relatedArtists.toSet()
             )
 
             _waveQueueTracks.value = rankedWaveQueue
@@ -852,7 +1010,6 @@ class PlayerViewModel(
 
     fun playTrack(track: Track, queue: List<Track> = listOf(track)) {
         playerController.playTrack(track, queue)
-        loadLyricsAndBioForTrack(track)
     }
 
     fun togglePlayPause() {

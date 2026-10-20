@@ -259,6 +259,16 @@ data class StarterArtistSeed(
     val name: String,
     val genreId: String,
     val subtitle: String,
+    val isRussian: Boolean = false,
+    val avatarUrl: String = ""
+)
+
+@Serializable
+data class ArtistSuggestion(
+    val name: String,
+    val subtitle: String = "",
+    val artworkUrl: String = "",
+    val genreId: String? = null,
     val isRussian: Boolean = false
 )
 
@@ -272,7 +282,8 @@ data class UserTasteProfile(
     val preferredEras: Set<TasteEraOption> = emptySet(),
     val discoveryBalance: TasteDiscoveryBalance = TasteDiscoveryBalance.BALANCED,
     val preferFullLengthTracks: Boolean = true,
-    val autoAdaptFromCollection: Boolean = true
+    val autoAdaptFromCollection: Boolean = true,
+    val artistArtworks: Map<String, String> = emptyMap()
 ) {
     val selectedGenres: List<TasteGenreOption>
         get() = selectedGenreIds.mapNotNull { TasteGenreOption.fromId(it) }
@@ -464,7 +475,28 @@ data class Track(
                 list.add(candidate)
             }
         }
-        return list
+        // Automatically inject a full-track cross-provider resolver candidate ahead of any 30s preview
+        val hasFullNonOfflineStream = list.any { !it.isPreview && it.instanceHost != "OFFLINE_CACHE" }
+        if (!isLiveStream && !hasFullNonOfflineStream && title.isNotBlank() && artist.isNotBlank()) {
+            val fullResolverUri = "fulltrack://${artist.trim()}|${title.trim()}|${durationSec.coerceAtLeast(180)}"
+            if (list.none { it.streamUrl == fullResolverUri }) {
+                list.add(
+                    StreamCandidate(
+                        provider = SourceProvider.YOUTUBE_PIPED,
+                        streamUrl = fullResolverUri,
+                        bitrateKbps = 256,
+                        isPreview = false,
+                        instanceHost = "FULL-AUDIO"
+                    )
+                )
+            }
+        }
+        // Always prioritize full-length audio streams ahead of 30-second teasers/previews
+        return list.sortedWith(
+            compareByDescending<StreamCandidate> { it.instanceHost == "OFFLINE_CACHE" }
+                .thenByDescending { !it.isPreview }
+                .thenByDescending { it.bitrateKbps }
+        )
     }
 }
 

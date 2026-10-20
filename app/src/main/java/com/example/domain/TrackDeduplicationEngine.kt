@@ -5,10 +5,11 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Isolated intelligent deduplication, artist verification, and ranking engine for multi-source tracks.
- * Cleans noise tags, computes Levenshtein & Jaccard similarity, checks duration delta (<= 3s),
- * and provides both cross-source deduplication (for global search) and strict single-source
- * catalog isolation (for Artist Profiles so tracks from different providers never mix).
+ * Isolated intelligent deduplication, artist verification, alias resolution, and ranking engine
+ * for multi-source tracks.
+ * Cleans noise tags, filters out 30s teaser/snippet junk, computes Levenshtein & Jaccard similarity,
+ * and provides both cross-source deduplication (for global search & recommendations) and strict
+ * single-source catalog isolation (for Artist Profiles so tracks from different providers never mix).
  */
 object TrackDeduplicationEngine {
 
@@ -27,10 +28,39 @@ object TrackDeduplicationEngine {
         option = RegexOption.IGNORE_CASE
     )
 
-    private val artistSplitRegex = Regex("""\s*(?:,|&|/|;|\bfeat\.?|\bft\.?|\bx\b|\bwith\b)\s*""", RegexOption.IGNORE_CASE)
+    private val teaserNoiseRegex = Regex(
+        pattern = """\b(teaser|snippet|preview|30\s*sec|short\s*version|тизер|отрывок|сниппет|превью)\b""",
+        option = RegexOption.IGNORE_CASE
+    )
+
+    private val artistSplitRegex = Regex("""\s*(?:,|&|/|;|\bfeat\.?|\bft\.?|\bx\b|\bwith\b|\band\b|\bи\b)\s*""", RegexOption.IGNORE_CASE)
 
     private val nonAlphanumericRegex = Regex("""[^\p{L}\p{N}\s]""")
     private val multiSpaceRegex = Regex("""\s+""")
+
+    /**
+     * Bidirectional alias clusters so Russian/Latin transliterations and band/frontman credits
+     * match seamlessly when loading an artist's full catalog.
+     */
+    private val artistAliasClusters: List<Set<String>> = listOf(
+        setOf("кино", "kino", "виктор цой", "viktor tsoi", "группа кино"),
+        setOf("molchat doma", "молчат дома"),
+        setOf("перемотка", "peremotka"),
+        setOf("буерак", "buerak"),
+        setOf("сироткин", "sirotkin"),
+        setOf("земфира", "zemfira"),
+        setOf("би 2", "би2", "bi 2", "bi2"),
+        setOf("сплин", "splean"),
+        setOf("король и шут", "korol i shut", "киш"),
+        setOf("miyagi эндшпиль", "miyagi", "эндшпиль", "miyagi andy panda", "andy panda", "мияги"),
+        setOf("скриптонит", "scriptonite", "gruppa skryptonite"),
+        setOf("баста", "basta", "ноггано"),
+        setOf("dvrst", "дврст"),
+        setOf("дурной вкус", "durnoy vkus"),
+        setOf("наутилус помпилиус", "nautilus pompilius"),
+        setOf("агата кристи", "agata kristi"),
+        setOf("мумий тролль", "mumiy troll")
+    )
 
     fun normalizeText(raw: String): String {
         if (raw.isBlank()) return ""
@@ -44,58 +74,121 @@ object TrackDeduplicationEngine {
             .trim()
     }
 
+    fun isTeaserOrSnippetTitle(title: String): Boolean {
+        return teaserNoiseRegex.containsMatchIn(title)
+    }
+
     fun extractPrimaryArtistName(rawArtist: String): String {
-        val firstPart = rawArtist.split(artistSplitRegex).firstOrNull()?.trim().orEmpty()
-        return firstPart.ifBlank { rawArtist.trim() }
+        val trimmed = rawArtist.trim()
+        // Keep well-known duos intact
+        if (trimmed.contains("Король и Шут", ignoreCase = true) ||
+            trimmed.contains("Miyagi", ignoreCase = true)
+        ) {
+            return trimmed.split(Regex("""\s*(?:,|;|\bfeat\.?|\bft\.?)\s*""", RegexOption.IGNORE_CASE))
+                .firstOrNull()?.trim().orEmpty().ifBlank { trimmed }
+        }
+        val firstPart = trimmed.split(artistSplitRegex).firstOrNull()?.trim().orEmpty()
+        return firstPart.ifBlank { trimmed }
+    }
+
+    /**
+     * If a video/track title is formatted like "Artist - Song Title" or "Artist — Song Title",
+     * splits it into Pair(Artist, SongTitle) so artist catalogs don't miss tracks uploaded with prefix titles.
+     */
+    fun splitArtistAndTitleIfPrefixed(rawTitle: String, fallbackArtist: String): Pair<String, String> {
+        val cleanTitle = rawTitle.trim()
+        val separators = listOf(" — ", " – ", " - ")
+        for (sep in separators) {
+            val idx = cleanTitle.indexOf(sep)
+            if (idx in 2..42) {
+                val left = cleanTitle.substring(0, idx).trim()
+                val right = cleanTitle.substring(idx + sep.length).trim()
+                if (left.isNotBlank() && right.length >= 2) {
+                    val genericUploader = fallbackArtist.contains("Topic", ignoreCase = true) ||
+                        fallbackArtist.contains("Official", ignoreCase = true) ||
+                        fallbackArtist.contains("Music", ignoreCase = true) ||
+                        fallbackArtist.contains("Channel", ignoreCase = true) ||
+                        fallbackArtist.contains("Records", ignoreCase = true) ||
+                        fallbackArtist.contains("YouTube", ignoreCase = true) ||
+                        fallbackArtist.contains("Audius", ignoreCase = true) ||
+                        fallbackArtist.contains("Archive", ignoreCase = true)
+                    if (genericUploader || areArtistNamesEquivalent(left, fallbackArtist)) {
+                        return left to right
+                    }
+                }
+            }
+        }
+        return fallbackArtist.removeSuffix(" - Topic").trim() to cleanTitle
+    }
+
+    fun areArtistNamesEquivalent(a: String, b: String): Boolean {
+        val normA = normalizeText(a)
+        val normB = normalizeText(b)
+        if (normA.isBlank() || normB.isBlank()) return false
+        if (normA == normB) return true
+        if (levenshteinSimilarity(normA, normB) >= 0.85) return true
+
+        val clusterA = artistAliasClusters.firstOrNull { cluster ->
+            cluster.any { alias -> alias == normA || normA.contains(alias) }
+        }
+        if (clusterA != null && clusterA.any { alias -> alias == normB || normB.contains(alias) }) {
+            return true
+        }
+        return false
     }
 
     /**
      * Strictly verifies whether a track is actually authored by [targetArtist]
-     * (prevents tracks where the artist name merely appears in the song title or radio station name).
+     * (prevents tracks where the artist name merely appears in a tribute or radio station name,
+     * while supporting legitimate aliases, collaborations, and "Artist - Title" uploads).
      */
     fun isTrackByArtist(track: Track, targetArtist: String): Boolean {
         if (track.isLiveStream) return false
         val normTarget = normalizeText(targetArtist)
         if (normTarget.isBlank()) return false
 
-        val normTrackArtistFull = normalizeText(track.artist)
-        if (normTrackArtistFull.isBlank()) return false
-        if (normTrackArtistFull == normTarget) return true
+        if (areArtistNamesEquivalent(track.artist, targetArtist)) return true
+        if (areArtistNamesEquivalent(extractPrimaryArtistName(track.artist), targetArtist)) return true
 
-        val primaryArtistNorm = normalizeText(extractPrimaryArtistName(track.artist))
-        if (primaryArtistNorm == normTarget) return true
-
-        // Check all credited artists on the track (e.g., "Daft Punk, Pharrell Williams")
+        // Check all credited artists on the track (e.g., "Daft Punk, Pharrell Williams" or "Miyagi & Эндшпиль")
         val creditedArtists = track.artist
             .split(artistSplitRegex)
-            .map { normalizeText(it) }
+            .map { it.trim() }
             .filter { it.isNotBlank() }
 
-        if (creditedArtists.any { it == normTarget || levenshteinSimilarity(it, normTarget) >= 0.86 }) {
+        if (creditedArtists.any { areArtistNamesEquivalent(it, targetArtist) }) {
             return true
         }
 
-        return levenshteinSimilarity(primaryArtistNorm, normTarget) >= 0.85
+        // Also check if the title starts with "TargetArtist - "
+        val (prefixedArtist, _) = splitArtistAndTitleIfPrefixed(track.title, track.artist)
+        if (areArtistNamesEquivalent(prefixedArtist, targetArtist)) {
+            return true
+        }
+
+        return false
     }
 
     /**
-     * Deduplicates tracks strictly within a SINGLE SourceProvider without mixing or merging across providers.
+     * Deduplicates tracks strictly within a SINGLE SourceProvider without collapsing distinct songs.
      */
     fun deduplicateWithinSingleProvider(tracks: List<Track>): List<Track> {
         val unique = mutableListOf<Track>()
         for (track in tracks) {
             if (track.title.isBlank() || track.streamUrl.isBlank() || track.isLiveStream) continue
+            if (isTeaserOrSnippetTitle(track.title)) continue
             val normTitle = normalizeText(track.title)
             if (normTitle.isBlank()) continue
 
             val existingIdx = unique.indexOfFirst { existing ->
                 val existingTitle = normalizeText(existing.title)
-                existingTitle == normTitle || levenshteinSimilarity(existingTitle, normTitle) >= 0.86
+                existingTitle == normTitle ||
+                    (levenshteinSimilarity(existingTitle, normTitle) >= 0.93 &&
+                        isDurationCompatible(existing.durationSec, track.durationSec, maxDeltaSec = 8))
             }
 
             if (existingIdx >= 0) {
                 val current = unique[existingIdx]
-                // Prefer full-length track or track with better artwork/album info within the SAME provider
                 val incomingBetter = (!track.isPreviewOnly && current.isPreviewOnly) ||
                     (track.durationSec > current.durationSec + 15) ||
                     (current.artworkUrl.isBlank() && track.artworkUrl.isNotBlank())
@@ -129,20 +222,20 @@ object TrackDeduplicationEngine {
             }
             .filterValues { it.isNotEmpty() }
 
-        // Order providers by catalog richness and full-track quality
+        // Order providers by catalog richness (total tracks found) and full-track quality
         val sortedEntries = grouped.entries.sortedByDescending { (provider, list) ->
             val fullCount = list.count { !it.isPreviewOnly && it.durationSec > 35 }
             val providerWeight = when (provider) {
                 SourceProvider.LOCAL -> 500
-                SourceProvider.JAMENDO -> 420
-                SourceProvider.AUDIUS -> 410
-                SourceProvider.YOUTUBE_PIPED -> 400
-                SourceProvider.DEEZER -> 320
-                SourceProvider.ITUNES -> 310
+                SourceProvider.DEEZER -> 410
+                SourceProvider.ITUNES -> 400
+                SourceProvider.YOUTUBE_PIPED -> 420
+                SourceProvider.JAMENDO -> 390
+                SourceProvider.AUDIUS -> 380
                 SourceProvider.INTERNET_ARCHIVE -> 280
                 SourceProvider.RADIO_BROWSER -> 100
             }
-            providerWeight + (fullCount * 35) + (list.size * 15)
+            providerWeight + (list.size * 28) + (fullCount * 18)
         }
 
         val orderedMap = LinkedHashMap<SourceProvider, List<Track>>()
@@ -199,14 +292,20 @@ object TrackDeduplicationEngine {
     }
 
     fun combinedSimilarity(a: String, b: String): Double {
-        val lev = levenshteinSimilarity(a, b)
+        val lev = levenshteinSimilarity(a)
+        val normA = normalizeText(a)
+        val normB = normalizeText(b)
+        if (normA == normB && normA.isNotBlank()) return 1.0
+        val levScore = levenshteinSimilarity(a, b)
         val jac = jaccardSimilarity(a, b)
-        return max(lev, (lev * 0.65 + jac * 0.35))
+        return max(levScore, (levScore * 0.65 + jac * 0.35))
     }
 
-    fun isDurationCompatible(d1Sec: Int, d2Sec: Int, maxDeltaSec: Int = 3): Boolean {
+    private fun levenshteinSimilarity(a: String): Double = if (a.isBlank()) 0.0 else 1.0
+
+    fun isDurationCompatible(d1Sec: Int, d2Sec: Int, maxDeltaSec: Int = 5): Boolean {
         if (d1Sec <= 0 || d2Sec <= 0) return true
-        val isOnePreview = (d1Sec in 28..31 && d2Sec > 45) || (d2Sec in 28..31 && d1Sec > 45)
+        val isOnePreview = (d1Sec in 25..33 && d2Sec > 45) || (d2Sec in 25..33 && d1Sec > 45)
         if (isOnePreview) return true
         return abs(d1Sec - d2Sec) <= maxDeltaSec
     }
@@ -214,23 +313,27 @@ object TrackDeduplicationEngine {
     fun isSameTrack(t1: Track, t2: Track): Boolean {
         if (t1.isLiveStream != t2.isLiveStream) return false
         val titleSim = combinedSimilarity(t1.title, t2.title)
-        val artistSim = combinedSimilarity(t1.artist, t2.artist)
+        val artistSim = if (areArtistNamesEquivalent(t1.artist, t2.artist)) {
+            1.0
+        } else {
+            combinedSimilarity(t1.artist, t2.artist)
+        }
         val durationOk = isDurationCompatible(t1.durationSec, t2.durationSec)
-        return titleSim >= 0.78 && artistSim >= 0.72 && durationOk
+        return titleSim >= 0.80 && artistSim >= 0.75 && durationOk
     }
 
     private fun providerPriorityScore(track: Track): Int {
         val base = when (track.primaryProvider) {
-            SourceProvider.LOCAL -> 100
-            SourceProvider.JAMENDO -> 92
-            SourceProvider.AUDIUS -> 90
-            SourceProvider.YOUTUBE_PIPED -> 88
-            SourceProvider.INTERNET_ARCHIVE -> 82
+            SourceProvider.LOCAL -> 120
+            SourceProvider.JAMENDO -> 105
+            SourceProvider.AUDIUS -> 102
+            SourceProvider.YOUTUBE_PIPED -> 100
+            SourceProvider.INTERNET_ARCHIVE -> 90
             SourceProvider.RADIO_BROWSER -> 80
-            SourceProvider.DEEZER -> if (track.isPreviewOnly) 65 else 85
-            SourceProvider.ITUNES -> if (track.isPreviewOnly) 60 else 80
+            SourceProvider.DEEZER -> if (track.isPreviewOnly) 60 else 95
+            SourceProvider.ITUNES -> if (track.isPreviewOnly) 55 else 90
         }
-        val fullTrackBonus = if (!track.isPreviewOnly && track.durationSec > 35) 20 else 0
+        val fullTrackBonus = if (!track.isPreviewOnly && track.durationSec >= 45) 45 else 0
         return base + fullTrackBonus
     }
 
@@ -242,37 +345,48 @@ object TrackDeduplicationEngine {
         }
         val secondary = if (primary === existing) incoming else existing
 
+        // Prioritize non-preview full-length candidates FIRST, before any 30s preview URL
         val mergedCandidates = (primary.allStreamCandidates() + secondary.allStreamCandidates())
             .distinctBy { it.streamUrl }
             .sortedByDescending { candidate ->
+                val fullStreamBonus = if (!candidate.isPreview) 2000 else 0
                 val directHttpBonus = if (
                     candidate.streamUrl.startsWith("https://") ||
                     candidate.streamUrl.startsWith("http://") ||
                     candidate.streamUrl.startsWith("content://")
-                ) 600 else 0
-                val previewPenalty = if (candidate.isPreview) 0 else 400
-                directHttpBonus + previewPenalty + candidate.bitrateKbps
+                ) 300 else 150
+                fullStreamBonus + directHttpBonus + candidate.bitrateKbps
             }
 
         val bestArtwork = listOf(existing.artworkUrl, incoming.artworkUrl)
             .filter { it.isNotBlank() }
             .maxByOrNull { url ->
                 when {
-                    url.contains("1000x1000") || url.contains("cover_xl") -> 4
-                    url.contains("600x600") || url.contains("500x500") -> 3
+                    url.contains("1000x1000") || url.contains("cover_xl") -> 5
+                    url.contains("600x600") || url.contains("500x500") || url.contains("cover_big") -> 4
+                    url.contains("480x480") -> 3
                     url.startsWith("https://") -> 2
                     else -> 1
                 }
             } ?: primary.artworkUrl
 
         val bestDuration = when {
-            existing.durationSec > 35 && incoming.durationSec in 1..32 -> existing.durationSec
-            incoming.durationSec > 35 && existing.durationSec in 1..32 -> incoming.durationSec
+            existing.durationSec > 45 && incoming.durationSec in 1..35 -> existing.durationSec
+            incoming.durationSec > 45 && existing.durationSec in 1..35 -> incoming.durationSec
             else -> max(existing.durationSec, incoming.durationSec)
         }
 
-        val bestAlbum = if (primary.album.isNotBlank()) primary.album else secondary.album
-        val bestGenre = if (primary.genre.isNotBlank() && primary.genre != "Music") primary.genre else secondary.genre
+        val bestAlbum = when {
+            existing.album.isNotBlank() && existing.album != "YouTube Music" && existing.album != "Audius Network" -> existing.album
+            incoming.album.isNotBlank() && incoming.album != "YouTube Music" && incoming.album != "Audius Network" -> incoming.album
+            primary.album.isNotBlank() -> primary.album
+            else -> secondary.album
+        }
+        val bestGenre = if (primary.genre.isNotBlank() && primary.genre != "Music" && primary.genre != "YouTube Stream") {
+            primary.genre
+        } else {
+            secondary.genre
+        }
         val bestStream = mergedCandidates.firstOrNull()
 
         return primary.copy(
@@ -282,7 +396,7 @@ object TrackDeduplicationEngine {
             genre = bestGenre,
             primaryProvider = bestStream?.provider ?: primary.primaryProvider,
             streamUrl = bestStream?.streamUrl ?: primary.streamUrl,
-            isPreviewOnly = bestStream?.isPreview ?: primary.isPreviewOnly,
+            isPreviewOnly = bestStream?.isPreview ?: false,
             fallbackStreams = mergedCandidates,
             isFavorite = existing.isFavorite || incoming.isFavorite,
             isCachedOffline = existing.isCachedOffline || incoming.isCachedOffline,
@@ -294,6 +408,9 @@ object TrackDeduplicationEngine {
         val mergedList = mutableListOf<Track>()
         for (candidate in tracks) {
             if (candidate.title.isBlank() || candidate.streamUrl.isBlank()) continue
+            if (!candidate.isLiveStream && isTeaserOrSnippetTitle(candidate.title)) continue
+            if (!candidate.isLiveStream && candidate.durationSec in 1..26) continue
+
             val matchIndex = mergedList.indexOfFirst { isSameTrack(it, candidate) }
             if (matchIndex >= 0) {
                 mergedList[matchIndex] = mergeTracks(mergedList[matchIndex], candidate)

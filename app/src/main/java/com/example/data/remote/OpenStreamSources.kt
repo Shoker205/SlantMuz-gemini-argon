@@ -83,6 +83,67 @@ class JamendoMusicSource : MusicSource {
             }
         }
 
+    override suspend fun searchArtistCatalog(artistName: String, limit: Int): SourceSearchResult =
+        withContext(Dispatchers.IO) {
+            val start = System.currentTimeMillis()
+            val clean = artistName.trim()
+            runCatching {
+                val encoded = HttpClientProvider.encode(clean)
+                val byArtistUrl = "https://api.jamendo.com/v3.0/tracks/?client_id=$publicClientId&format=json&limit=${limit.coerceAtLeast(40)}&artist_name=$encoded&audioformat=mp32"
+                val body = HttpClientProvider.getBodyString(byArtistUrl)
+                val root = HttpClientProvider.json.parseToJsonElement(body).jsonObject
+                val results = root["results"]?.jsonArray ?: JsonArray(emptyList())
+                val tracks = results.mapNotNull { el ->
+                    val obj = el.jsonObject
+                    val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val title = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val artist = obj["artist_name"]?.jsonPrimitive?.contentOrNull ?: clean
+                    val album = obj["album_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val duration = obj["duration"]?.jsonPrimitive?.intOrNull ?: 180
+                    if (duration in 1..38) return@mapNotNull null
+                    val image = obj["album_image"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["image"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val audio = obj["audio"]?.jsonPrimitive?.contentOrNull
+                        ?.takeIf { it.isNotBlank() }
+                        ?: "https://mp3d.jamendo.com/download/track/$id/mp32/"
+                    Track(
+                        id = "jam_$id",
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        artworkUrl = image,
+                        durationSec = duration,
+                        primaryProvider = SourceProvider.JAMENDO,
+                        streamUrl = audio,
+                        fallbackStreams = listOf(
+                            StreamCandidate(
+                                provider = SourceProvider.JAMENDO,
+                                streamUrl = audio,
+                                bitrateKbps = 320,
+                                isPreview = false,
+                                instanceHost = activeMirrorHost
+                            )
+                        ),
+                        isPreviewOnly = false,
+                        genre = "Creative Commons HD"
+                    )
+                }
+                if (tracks.isNotEmpty()) {
+                    SourceSearchResult(
+                        provider = provider,
+                        tracks = tracks,
+                        latencyMs = System.currentTimeMillis() - start,
+                        activeMirror = activeMirrorHost,
+                        isOnline = true
+                    )
+                } else {
+                    search(clean, limit.coerceAtLeast(35))
+                }
+            }.getOrElse {
+                search(clean, limit.coerceAtLeast(35))
+            }
+        }
+
     override suspend fun getTrending(limit: Int): SourceSearchResult =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
@@ -199,6 +260,9 @@ class AudiusMusicSource : MusicSource {
             }
         }
 
+    override suspend fun searchArtistCatalog(artistName: String, limit: Int): SourceSearchResult =
+        search(artistName, limit = limit.coerceAtLeast(40))
+
     override suspend fun getTrending(limit: Int): SourceSearchResult =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
@@ -233,11 +297,16 @@ class AudiusMusicSource : MusicSource {
         return data.take(limit).mapNotNull { el ->
             val obj = el.jsonObject
             val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val title = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val rawTitle = obj["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val duration = obj["duration"]?.jsonPrimitive?.intOrNull ?: 180
+            if (duration in 1..40) return@mapNotNull null
             val genre = obj["genre"]?.jsonPrimitive?.contentOrNull ?: "Electronic"
             val userObj = obj["user"]?.jsonObject
-            val artist = userObj?.get("name")?.jsonPrimitive?.contentOrNull ?: "Audius Creator"
+            val rawArtist = userObj?.get("name")?.jsonPrimitive?.contentOrNull ?: "Audius Creator"
+            val (resolvedArtist, resolvedTitle) = com.example.domain.TrackDeduplicationEngine.splitArtistAndTitleIfPrefixed(
+                rawTitle = rawTitle,
+                fallbackArtist = rawArtist
+            )
             val artworkObj = obj["artwork"]?.jsonObject
             val artwork = artworkObj?.get("480x480")?.jsonPrimitive?.contentOrNull
                 ?: artworkObj?.get("1000x1000")?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -245,8 +314,8 @@ class AudiusMusicSource : MusicSource {
 
             Track(
                 id = "aud_$id",
-                title = title,
-                artist = artist,
+                title = resolvedTitle,
+                artist = resolvedArtist,
                 album = "Audius Network",
                 artworkUrl = artwork,
                 durationSec = duration,

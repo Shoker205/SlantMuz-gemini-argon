@@ -169,6 +169,9 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     val selectedArtistProfile by viewModel.selectedArtistProfile.collectAsStateWithLifecycle()
     val likedArtistNames by viewModel.likedArtistNames.collectAsStateWithLifecycle()
     val tasteDnaSummary by viewModel.tasteDnaSummary.collectAsStateWithLifecycle()
+    val artistAutocompleteSuggestions by viewModel.artistAutocompleteSuggestions.collectAsStateWithLifecycle()
+    val isArtistSuggestLoading by viewModel.isArtistSuggestLoading.collectAsStateWithLifecycle()
+    val artistArtworksMap by viewModel.artistArtworksMap.collectAsStateWithLifecycle()
     val likedAlbumKeys = userSettings.tasteProfile.likedAlbums
     val playlistDomainTracks = remember(playlists) {
         playlists.flatMap { pw -> pw.tracks.map { it.toDomain() } }
@@ -776,6 +779,11 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
             favoriteTracks = favoriteTracks,
             playlistTracks = playlistDomainTracks,
             historyTracks = historyTracks,
+            artistSuggestions = artistAutocompleteSuggestions,
+            isArtistSuggestLoading = isArtistSuggestLoading,
+            artistArtworks = artistArtworksMap,
+            onArtistQueryChange = { viewModel.onArtistPreferenceQueryChanged(it) },
+            onClearArtistSuggestions = { viewModel.onArtistPreferenceQueryChanged("") },
             onSaveProfile = { newProfile, launchWaveNow ->
                 viewModel.saveUserTasteProfile(newProfile, launchWaveImmediately = launchWaveNow)
                 showTasteSetupSheet = false

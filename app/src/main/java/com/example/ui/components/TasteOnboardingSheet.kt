@@ -1,9 +1,9 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -32,13 +34,16 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,10 +64,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.example.domain.ArtistSuggestion
 import com.example.domain.SlantWaveEngine
 import com.example.domain.TasteDiscoveryBalance
 import com.example.domain.TasteEraOption
@@ -78,9 +87,8 @@ import com.example.ui.theme.SlantViolet
 
 /**
  * Interactive Pre-Configuration & Musical DNA Wizard ("Предварительная настройка вкусов и ДНК").
- * Lets the user select favorite genres, favorite artists (from curated seeds, their existing
- * collection, or custom text input), language preferences, eras, and discovery balance,
- * and shows live collection signals (liked tracks, playlists, albums, history).
+ * Includes live artist autocomplete dropdown with cover art, starter artist avatars,
+ * genre selection, and full-length track prioritization.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -90,6 +98,11 @@ fun TasteOnboardingSheet(
     favoriteTracks: List<Track>,
     playlistTracks: List<Track>,
     historyTracks: List<Track>,
+    artistSuggestions: List<ArtistSuggestion> = emptyList(),
+    isArtistSuggestLoading: Boolean = false,
+    artistArtworks: Map<String, String> = emptyMap(),
+    onArtistQueryChange: (String) -> Unit = {},
+    onClearArtistSuggestions: () -> Unit = {},
     onSaveProfile: (UserTasteProfile, Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -97,6 +110,9 @@ fun TasteOnboardingSheet(
 
     var selectedGenres by remember(currentProfile) { mutableStateOf(currentProfile.selectedGenreIds) }
     var selectedArtists by remember(currentProfile) { mutableStateOf(currentProfile.selectedArtists) }
+    var draftArtistArtworks by remember(currentProfile, artistArtworks) {
+        mutableStateOf(currentProfile.artistArtworks + artistArtworks)
+    }
     var preferredLanguages by remember(currentProfile) { mutableStateOf(currentProfile.preferredLanguages) }
     var preferredEras by remember(currentProfile) { mutableStateOf(currentProfile.preferredEras) }
     var discoveryBalance by remember(currentProfile) { mutableStateOf(currentProfile.discoveryBalance) }
@@ -107,6 +123,17 @@ fun TasteOnboardingSheet(
     var customArtistInput by remember { mutableStateOf("") }
     var artistGenreFilter by remember { mutableStateOf<String?>(null) }
 
+    val collectionArtistArtworkMap = remember(favoriteTracks, playlistTracks, historyTracks) {
+        val map = mutableMapOf<String, String>()
+        (favoriteTracks + playlistTracks + historyTracks).forEach { track ->
+            val key = track.artist.trim().lowercase()
+            if (key.isNotBlank() && track.artworkUrl.isNotBlank() && key !in map) {
+                map[key] = track.artworkUrl
+            }
+        }
+        map
+    }
+
     val collectionArtists = remember(favoriteTracks, playlistTracks, historyTracks) {
         (favoriteTracks.map { it.artist } + playlistTracks.map { it.artist } + historyTracks.map { it.artist })
             .map { it.trim() }
@@ -115,9 +142,19 @@ fun TasteOnboardingSheet(
             .take(18)
     }
 
+    fun resolveArtworkForArtist(artistName: String): String {
+        val key = artistName.trim().lowercase()
+        return draftArtistArtworks[key]
+            ?: artistArtworks[key]
+            ?: collectionArtistArtworkMap[key]
+            ?: artistSuggestions.firstOrNull { it.name.equals(artistName, ignoreCase = true) }?.artworkUrl
+            ?: ""
+    }
+
     val liveDraftProfile = remember(
         selectedGenres,
         selectedArtists,
+        draftArtistArtworks,
         preferredLanguages,
         preferredEras,
         discoveryBalance,
@@ -128,6 +165,7 @@ fun TasteOnboardingSheet(
             isOnboardingCompleted = true,
             selectedGenreIds = selectedGenres,
             selectedArtists = selectedArtists,
+            artistArtworks = draftArtistArtworks,
             preferredLanguages = preferredLanguages,
             preferredEras = preferredEras,
             discoveryBalance = discoveryBalance,
@@ -371,64 +409,261 @@ fun TasteOnboardingSheet(
                         }
                     }
 
-                    // TAB 1: ARTISTS
+                    // TAB 1: ARTISTS WITH LIVE AUTOCOMPLETE + COVER ART
                     1 -> {
                         item {
                             Text(
-                                text = "Отметьте любимых авторов или добавьте любого исполнителя вручную — их треки и похожие артисты получат максимальный приоритет:",
+                                text = "Начните вводить имя автора для выбора из живых подсказок с обложками или отметьте любимых исполнителей ниже:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.72f)
                             )
                         }
 
-                        // Custom artist input row
+                        // Custom artist input row + live autocomplete popup card
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedTextField(
-                                    value = customArtistInput,
-                                    onValueChange = { customArtistInput = it },
-                                    placeholder = { Text("Введите имя любого автора…") },
-                                    singleLine = true,
-                                    shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("custom_artist_input")
-                                )
-
-                                Button(
-                                    onClick = {
-                                        val clean = customArtistInput.trim()
-                                        if (clean.length >= 2) {
-                                            selectedArtists = selectedArtists + clean
-                                            customArtistInput = ""
-                                        }
-                                    },
-                                    enabled = customArtistInput.trim().length >= 2,
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = SlantCyan,
-                                        contentColor = Color(0xFF0E1118)
-                                    ),
-                                    modifier = Modifier
-                                        .height(50.dp)
-                                        .testTag("add_custom_artist_btn")
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                                    OutlinedTextField(
+                                        value = customArtistInput,
+                                        onValueChange = { newText ->
+                                            customArtistInput = newText
+                                            onArtistQueryChange(newText)
+                                        },
+                                        placeholder = { Text("Поиск автора (например: Кино, Miyagi, Weeknd)…") },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = SlantCyan
+                                            )
+                                        },
+                                        trailingIcon = {
+                                            if (isArtistSuggestLoading) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    strokeWidth = 2.dp,
+                                                    color = SlantCyan
+                                                )
+                                            } else if (customArtistInput.isNotEmpty()) {
+                                                IconButton(
+                                                    onClick = {
+                                                        customArtistInput = ""
+                                                        onClearArtistSuggestions()
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "Очистить",
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("custom_artist_input")
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Добавить", fontWeight = FontWeight.Bold)
+
+                                    Button(
+                                        onClick = {
+                                            val clean = customArtistInput.trim()
+                                            if (clean.length >= 2) {
+                                                val topMatch = artistSuggestions.firstOrNull {
+                                                    it.name.equals(clean, ignoreCase = true)
+                                                }
+                                                val canonicalName = topMatch?.name ?: clean
+                                                selectedArtists = selectedArtists + canonicalName
+                                                if (topMatch != null && topMatch.artworkUrl.isNotBlank()) {
+                                                    draftArtistArtworks = draftArtistArtworks +
+                                                        (canonicalName.lowercase() to topMatch.artworkUrl)
+                                                }
+                                                val topGenreId = topMatch?.genreId
+                                                if (!topGenreId.isNullOrBlank()) {
+                                                    selectedGenres = selectedGenres + topGenreId
+                                                }
+                                                customArtistInput = ""
+                                                onClearArtistSuggestions()
+                                            }
+                                        },
+                                        enabled = customArtistInput.trim().length >= 2,
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = SlantCyan,
+                                            contentColor = Color(0xFF0E1118)
+                                        ),
+                                        modifier = Modifier
+                                            .height(52.dp)
+                                            .testTag("add_custom_artist_btn")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Add,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Добавить", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                // Live Autocomplete Suggestions Dropdown with Artist Cover Art
+                                AnimatedVisibility(
+                                    visible = customArtistInput.trim().length >= 2 && artistSuggestions.isNotEmpty()
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = Color(0xFF171D2E),
+                                        border = BorderStroke(1.2.dp, SlantCyan.copy(alpha = 0.55f)),
+                                        tonalElevation = 8.dp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp)
+                                            .testTag("artist_autocomplete_dropdown")
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Подсказки исполнителей — нажмите, чтобы выбрать:",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = SlantCyan,
+                                                fontWeight = FontWeight.SemiBold,
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                                            )
+
+                                            artistSuggestions.take(7).forEachIndexed { idx, suggestion ->
+                                                val alreadySelected = selectedArtists.any {
+                                                    it.equals(suggestion.name, ignoreCase = true)
+                                                }
+                                                val avatarUrl = suggestion.artworkUrl.ifBlank {
+                                                    resolveArtworkForArtist(suggestion.name)
+                                                }
+
+                                                Surface(
+                                                    onClick = {
+                                                        val existing = selectedArtists.firstOrNull {
+                                                            it.equals(suggestion.name, ignoreCase = true)
+                                                        }
+                                                        selectedArtists = if (existing != null) {
+                                                            selectedArtists - existing
+                                                        } else {
+                                                            selectedArtists + suggestion.name
+                                                        }
+                                                        if (avatarUrl.isNotBlank()) {
+                                                            draftArtistArtworks = draftArtistArtworks +
+                                                                (suggestion.name.lowercase() to avatarUrl)
+                                                        }
+                                                        val sugGenreId = suggestion.genreId
+                                                        if (existing == null && !sugGenreId.isNullOrBlank()) {
+                                                            selectedGenres = selectedGenres + sugGenreId
+                                                        }
+                                                        customArtistInput = ""
+                                                        onClearArtistSuggestions()
+                                                    },
+                                                    color = if (alreadySelected) {
+                                                        SlantCyan.copy(alpha = 0.14f)
+                                                    } else {
+                                                        Color.Transparent
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .testTag("artist_suggestion_${suggestion.name}")
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        ArtistCoverBadge(
+                                                            artistName = suggestion.name,
+                                                            artworkUrl = avatarUrl,
+                                                            isSelected = alreadySelected,
+                                                            size = 44.dp
+                                                        )
+
+                                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = suggestion.name,
+                                                                style = MaterialTheme.typography.titleSmall,
+                                                                color = Color.White,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = suggestion.subtitle.ifBlank { "Исполнитель" },
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = Color.White.copy(alpha = 0.68f),
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+
+                                                        Surface(
+                                                            shape = RoundedCornerShape(12.dp),
+                                                            color = if (alreadySelected) {
+                                                                SlantEmerald.copy(alpha = 0.22f)
+                                                            } else {
+                                                                SlantCyan.copy(alpha = 0.2f)
+                                                            },
+                                                            border = BorderStroke(
+                                                                1.dp,
+                                                                if (alreadySelected) SlantEmerald else SlantCyan
+                                                            )
+                                                        ) {
+                                                            Row(
+                                                                modifier = Modifier.padding(
+                                                                    horizontal = 10.dp,
+                                                                    vertical = 5.dp
+                                                                ),
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = if (alreadySelected) {
+                                                                        Icons.Default.Check
+                                                                    } else {
+                                                                        Icons.Default.Add
+                                                                    },
+                                                                    contentDescription = null,
+                                                                    tint = if (alreadySelected) SlantEmerald else SlantCyan,
+                                                                    modifier = Modifier.size(14.dp)
+                                                                )
+                                                                Spacer(modifier = Modifier.width(4.dp))
+                                                                Text(
+                                                                    text = if (alreadySelected) "Выбрано" else "Выбрать",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = if (alreadySelected) SlantEmerald else SlantCyan,
+                                                                    fontWeight = FontWeight.Bold
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                if (idx < artistSuggestions.take(7).lastIndex) {
+                                                    HorizontalDivider(
+                                                        color = Color.White.copy(alpha = 0.07f),
+                                                        modifier = Modifier.padding(horizontal = 14.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        // Currently selected artists chips
+                        // Currently selected artists chips with cover art
                         if (selectedArtists.isNotEmpty()) {
                             item {
                                 Surface(
@@ -446,28 +681,50 @@ fun TasteOnboardingSheet(
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                             selectedArtists.forEach { artist ->
-                                                FilterChip(
-                                                    selected = true,
+                                                val coverUrl = resolveArtworkForArtist(artist)
+                                                Surface(
                                                     onClick = {
                                                         selectedArtists = selectedArtists - artist
                                                     },
-                                                    label = { Text(artist) },
-                                                    trailingIcon = {
+                                                    shape = RoundedCornerShape(22.dp),
+                                                    color = SlantCyan.copy(alpha = 0.22f),
+                                                    border = BorderStroke(1.dp, SlantCyan.copy(alpha = 0.6f))
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(
+                                                            start = 5.dp,
+                                                            end = 10.dp,
+                                                            top = 4.dp,
+                                                            bottom = 4.dp
+                                                        ),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        ArtistCoverBadge(
+                                                            artistName = artist,
+                                                            artworkUrl = coverUrl,
+                                                            isSelected = true,
+                                                            size = 26.dp
+                                                        )
+                                                        Spacer(modifier = Modifier.width(7.dp))
+                                                        Text(
+                                                            text = artist,
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            color = Color.White,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
                                                         Icon(
                                                             imageVector = Icons.Default.Close,
                                                             contentDescription = "Убрать",
+                                                            tint = Color.White.copy(alpha = 0.8f),
                                                             modifier = Modifier.size(14.dp)
                                                         )
-                                                    },
-                                                    colors = FilterChipDefaults.filterChipColors(
-                                                        selectedContainerColor = SlantCyan.copy(alpha = 0.25f),
-                                                        selectedLabelColor = Color.White
-                                                    )
-                                                )
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -494,8 +751,8 @@ fun TasteOnboardingSheet(
                                             val isSelected = selectedArtists.any {
                                                 it.equals(artist, ignoreCase = true)
                                             }
-                                            FilterChip(
-                                                selected = isSelected,
+                                            val coverUrl = resolveArtworkForArtist(artist)
+                                            Surface(
                                                 onClick = {
                                                     val match = selectedArtists.firstOrNull {
                                                         it.equals(artist, ignoreCase = true)
@@ -503,25 +760,48 @@ fun TasteOnboardingSheet(
                                                     selectedArtists = if (match != null) {
                                                         selectedArtists - match
                                                     } else {
+                                                        if (coverUrl.isNotBlank()) {
+                                                            draftArtistArtworks = draftArtistArtworks +
+                                                                (artist.lowercase() to coverUrl)
+                                                        }
                                                         selectedArtists + artist
                                                     }
                                                 },
-                                                label = { Text(artist) },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        imageVector = if (isSelected) Icons.Default.Favorite else Icons.Default.Person,
-                                                        contentDescription = null,
-                                                        tint = if (isSelected) SlantMagenta else Color.White.copy(alpha = 0.7f),
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
+                                                shape = RoundedCornerShape(22.dp),
+                                                color = if (isSelected) {
+                                                    SlantMagenta.copy(alpha = 0.25f)
+                                                } else {
+                                                    Color.White.copy(alpha = 0.07f)
                                                 },
-                                                colors = FilterChipDefaults.filterChipColors(
-                                                    selectedContainerColor = SlantMagenta.copy(alpha = 0.25f),
-                                                    selectedLabelColor = Color.White,
-                                                    containerColor = Color.White.copy(alpha = 0.07f),
-                                                    labelColor = Color.White
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    if (isSelected) SlantMagenta else Color.White.copy(alpha = 0.14f)
                                                 )
-                                            )
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(
+                                                        start = 5.dp,
+                                                        end = 11.dp,
+                                                        top = 4.dp,
+                                                        bottom = 4.dp
+                                                    ),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    ArtistCoverBadge(
+                                                        artistName = artist,
+                                                        artworkUrl = coverUrl,
+                                                        isSelected = isSelected,
+                                                        size = 24.dp
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = artist,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = Color.White,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -559,6 +839,7 @@ fun TasteOnboardingSheet(
 
                         items(filteredSeeds, key = { it.name }) { seed ->
                             val isSelected = selectedArtists.any { it.equals(seed.name, ignoreCase = true) }
+                            val coverUrl = resolveArtworkForArtist(seed.name).ifBlank { seed.avatarUrl }
                             Surface(
                                 onClick = {
                                     val match = selectedArtists.firstOrNull {
@@ -567,6 +848,10 @@ fun TasteOnboardingSheet(
                                     selectedArtists = if (match != null) {
                                         selectedArtists - match
                                     } else {
+                                        if (coverUrl.isNotBlank()) {
+                                            draftArtistArtworks = draftArtistArtworks +
+                                                (seed.name.lowercase() to coverUrl)
+                                        }
                                         selectedArtists + seed.name
                                     }
                                     // Also auto-enable the artist's genre if not yet selected
@@ -590,22 +875,12 @@ fun TasteOnboardingSheet(
                                         .padding(horizontal = 14.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(
-                                                if (isSelected) SlantViolet else Color.White.copy(alpha = 0.1f)
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isSelected) Icons.Default.Check else Icons.Default.Person,
-                                            contentDescription = null,
-                                            tint = if (isSelected) Color(0xFF0E1118) else Color.White,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    ArtistCoverBadge(
+                                        artistName = seed.name,
+                                        artworkUrl = coverUrl,
+                                        isSelected = isSelected,
+                                        size = 44.dp
+                                    )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -625,7 +900,24 @@ fun TasteOnboardingSheet(
                                             text = "RU",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = SlantCyan,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(end = 8.dp)
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isSelected) SlantViolet else Color.White.copy(alpha = 0.08f)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isSelected) Icons.Default.Check else Icons.Default.Add,
+                                            contentDescription = null,
+                                            tint = if (isSelected) Color(0xFF0E1118) else Color.White.copy(alpha = 0.75f),
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
@@ -828,13 +1120,13 @@ fun TasteOnboardingSheet(
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Приоритет полных HD-треков",
+                                                text = "Избегать 30-сек тизеров (только полные треки)",
                                                 style = MaterialTheme.typography.titleSmall,
                                                 color = Color.White,
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                             Text(
-                                                text = "Повышать полные треки (Jamendo/Audius/YTM) выше 30-сек превью",
+                                                text = "Автоматически заменять 30-секундные сниппеты на полные аудиопотоки и фильтровать тизеры",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = Color.White.copy(alpha = 0.65f)
                                             )
@@ -901,6 +1193,66 @@ fun TasteOnboardingSheet(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Circular artist cover avatar with gradient monogram fallback and selection ring.
+ */
+@Composable
+private fun ArtistCoverBadge(
+    artistName: String,
+    artworkUrl: String,
+    isSelected: Boolean,
+    size: Dp
+) {
+    val initials = remember(artistName) {
+        artistName.trim()
+            .split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+            .take(2)
+            .joinToString("") { it.take(1).uppercase() }
+            .ifBlank { "♪" }
+    }
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(
+                Brush.linearGradient(
+                    if (isSelected) {
+                        listOf(SlantCyan, SlantViolet)
+                    } else {
+                        listOf(Color(0xFF283149), Color(0xFF1A2032))
+                    }
+                )
+            )
+            .then(
+                if (isSelected) {
+                    Modifier.border(1.5.dp, SlantCyan, CircleShape)
+                } else {
+                    Modifier.border(1.dp, Color.White.copy(alpha = 0.14f), CircleShape)
+                }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = initials,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            fontWeight = FontWeight.ExtraBold
+        )
+        if (artworkUrl.isNotBlank()) {
+            AsyncImage(
+                model = artworkUrl,
+                contentDescription = artistName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
         }
     }
 }

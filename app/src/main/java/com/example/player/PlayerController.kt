@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
-import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -12,6 +11,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.example.domain.SourceProvider
@@ -51,7 +51,8 @@ data class PlaybackUiState(
 )
 
 /**
- * Central ExoPlayer & MediaSession coordinator with automatic multi-provider stream failover,
+ * Central ExoPlayer & MediaSession coordinator with low-latency LoadControl (550ms start buffer),
+ * background queue stream pre-resolution, automatic multi-provider stream failover,
  * real-time 100ms progress updates, Home Screen AppWidget synchronization, Sleep Timer, and DSP binding.
  */
 @OptIn(UnstableApi::class)
@@ -63,8 +64,11 @@ class PlayerController private constructor(private val context: Context) {
     private var exoPlayer: ExoPlayer? = null
     private var progressJob: Job? = null
     private var sleepTimerJob: Job? = null
+    private var activeStreamResolutionJob: Job? = null
+    private var queuePrefetchJob: Job? = null
 
     private var streamResolver: (suspend (SourceProvider, String, Track) -> String)? = null
+    private var prefetchCallback: (suspend (Track) -> Unit)? = null
     private var onTrackPlayedCallback: (suspend (Track) -> Unit)? = null
 
     private var candidateIndexForCurrentTrack: Int = 0
@@ -74,9 +78,11 @@ class PlayerController private constructor(private val context: Context) {
 
     fun attachResolvers(
         resolver: suspend (SourceProvider, String, Track) -> String,
+        prefetcher: suspend (Track) -> Unit = {},
         onTrackPlayed: suspend (Track) -> Unit
     ) {
         this.streamResolver = resolver
+        this.prefetchCallback = prefetcher
         this.onTrackPlayedCallback = onTrackPlayed
     }
 
@@ -88,11 +94,23 @@ class PlayerController private constructor(private val context: Context) {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
 
+        // Fast-start LoadControl: starts audio playback after just 550ms of buffering instead of 2500ms
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 14_000,
+                /* maxBufferMs = */ 45_000,
+                /* bufferForPlaybackMs = */ 550,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_100
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         val cacheDataSourceFactory = ExoPlayerCacheProvider.buildCacheDataSourceFactory(context)
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
             .setDataSourceFactory(cacheDataSourceFactory)
 
         val player = ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
             .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
@@ -101,7 +119,10 @@ class PlayerController private constructor(private val context: Context) {
 
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                _playbackState.value = _playbackState.value.copy(isPlaying = isPlaying)
+                _playbackState.value = _playbackState.value.copy(
+                    isPlaying = isPlaying,
+                    isBuffering = if (isPlaying) false else _playbackState.value.isBuffering
+                )
                 SlantMuzWidgetUpdater.updateAllWidgets(context, _playbackState.value)
                 if (isPlaying) startProgressPolling() else stopProgressPolling()
             }
@@ -139,6 +160,10 @@ class PlayerController private constructor(private val context: Context) {
     }
 
     fun playTrack(track: Track, newQueue: List<Track> = listOf(track)) {
+        // Cancel any previous in-flight track resolution immediately so rapid Next/Prev taps never lag
+        activeStreamResolutionJob?.cancel()
+        queuePrefetchJob?.cancel()
+
         val queueToUse = if (newQueue.isNotEmpty()) newQueue else listOf(track)
         val index = queueToUse.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
         candidateIndexForCurrentTrack = 0
@@ -161,8 +186,31 @@ class PlayerController private constructor(private val context: Context) {
         playCandidateStream(track, chosen)
         SlantMuzWidgetUpdater.updateAllWidgets(context, _playbackState.value)
 
-        scope.launch(Dispatchers.IO) {
-            onTrackPlayedCallback?.invoke(track)
+        // Pre-resolve upcoming tracks in the queue in the background for 0ms instant switching
+        scheduleQueuePrefetch(queueToUse, index, track)
+    }
+
+    private fun scheduleQueuePrefetch(queue: List<Track>, currentIndex: Int, currentTrack: Track) {
+        queuePrefetchJob?.cancel()
+        queuePrefetchJob = scope.launch(Dispatchers.IO) {
+            // Let the active stream establish its socket first before background tasks
+            delay(500L)
+            runCatching { onTrackPlayedCallback?.invoke(currentTrack) }
+
+            if (queue.size <= 1) return@launch
+            val upcomingIndices = listOf(
+                (currentIndex + 1) % queue.size,
+                (currentIndex + 2) % queue.size,
+                (currentIndex + 3) % queue.size,
+                if (currentIndex - 1 >= 0) currentIndex - 1 else queue.lastIndex
+            ).distinct().filter { it != currentIndex && it in queue.indices }
+
+            for (idx in upcomingIndices) {
+                if (!isActive) break
+                runCatching {
+                    prefetchCallback?.invoke(queue[idx])
+                }
+            }
         }
     }
 
@@ -176,7 +224,8 @@ class PlayerController private constructor(private val context: Context) {
     }
 
     private fun playCandidateStream(track: Track, candidate: StreamCandidate) {
-        scope.launch {
+        activeStreamResolutionJob?.cancel()
+        activeStreamResolutionJob = scope.launch {
             _playbackState.value = _playbackState.value.copy(
                 activeStreamCandidate = candidate,
                 isBuffering = true
@@ -190,6 +239,8 @@ class PlayerController private constructor(private val context: Context) {
                         ?: candidate.streamUrl
                 }
             }.getOrDefault("")
+
+            if (!isActive) return@launch
 
             if (!isPlayableUriScheme(resolvedUrl)) {
                 attemptStreamFailover("Протокол потока недоступен, поиск альтернативного зеркала…")

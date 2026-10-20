@@ -8,13 +8,16 @@ import com.example.data.local.PlaylistWithTracks
 import com.example.data.local.SearchHistoryEntity
 import com.example.data.local.SlantMuzDao
 import com.example.data.local.TrackEntity
+import com.example.domain.ArtistSuggestion
 import com.example.domain.ProviderHealthStatus
+import com.example.domain.SlantWaveEngine
 import com.example.domain.SourceFilter
 import com.example.domain.SourceProvider
 import com.example.domain.Track
 import com.example.domain.TrackDeduplicationEngine
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
 
 class CompositeMusicRepository(
@@ -49,6 +53,22 @@ class CompositeMusicRepository(
         radioSource,
         archiveSource
     )
+
+    /**
+     * In-memory cache of resolved full-length playable stream URLs so prefetched or previously
+     * played tracks start in 0ms without any network delay on track switch.
+     */
+    private val resolvedStreamCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * In-memory cache of artist cover URLs (keyed by lowercase artist name).
+     */
+    private val artistArtworkCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * In-memory cache of collaborative-filtering related artists per artist name.
+     */
+    private val relatedArtistsCache = ConcurrentHashMap<String, List<String>>()
 
     private val _providerStatuses = MutableStateFlow<List<ProviderHealthStatus>>(
         SourceProvider.entries.map { provider ->
@@ -105,7 +125,7 @@ class CompositeMusicRepository(
 
     /**
      * Multi-source fault-tolerant parallel search using async {} and awaitAll(),
-     * followed by intelligent deduplication and ranking.
+     * with deep limits (25 per provider) followed by intelligent deduplication and ranking.
      */
     suspend fun searchMultiSource(
         query: String,
@@ -132,7 +152,7 @@ class CompositeMusicRepository(
                 .map { source ->
                     async {
                         runCatching {
-                            source.search(query, limit = 12)
+                            source.search(query, limit = 24)
                         }.getOrElse { e ->
                             SourceSearchResult(
                                 provider = source.provider,
@@ -182,8 +202,9 @@ class CompositeMusicRepository(
     }
 
     /**
-     * Queries active providers for a specific artist while keeping each provider's tracks strictly
-     * isolated (no cross-source mixing) and verified by artist name.
+     * Queries active providers for a specific artist using dedicated deep artist catalog endpoints
+     * (`searchArtistCatalog` with limit = 55) so 25–60+ tracks of the artist are discovered,
+     * while keeping each provider's tracks strictly isolated (no cross-source mixing).
      */
     suspend fun fetchArtistCatalogByProvider(
         artistName: String,
@@ -203,7 +224,7 @@ class CompositeMusicRepository(
             val deferred = activeNetwork.map { source ->
                 async {
                     runCatching {
-                        source.search(cleanName, limit = 15)
+                        source.searchArtistCatalog(cleanName, limit = 55)
                     }.getOrNull()
                 }
             }
@@ -238,6 +259,139 @@ class CompositeMusicRepository(
     }
 
     /**
+     * Live autocomplete artist search with cover art (`artworkUrl`) for `TasteOnboardingSheet`.
+     */
+    suspend fun searchArtistSuggestions(query: String, limit: Int = 8): List<ArtistSuggestion> =
+        withContext(Dispatchers.IO) {
+            val clean = query.trim()
+            if (clean.length < 2) return@withContext emptyList()
+
+            coroutineScope {
+                val deezerDeferred = async {
+                    runCatching { deezerSource.searchArtists(clean, limit = limit) }.getOrDefault(emptyList())
+                }
+                val itunesDeferred = async {
+                    runCatching { itunesSource.searchArtists(clean, limit = 6) }.getOrDefault(emptyList())
+                }
+
+                val deezerList = deezerDeferred.await()
+                val itunesList = itunesDeferred.await()
+
+                val merged = LinkedHashMap<String, ArtistSuggestion>()
+                for (item in (deezerList + itunesList)) {
+                    val norm = TrackDeduplicationEngine.normalizeText(item.name)
+                    if (norm.isBlank()) continue
+                    if (item.artworkUrl.isNotBlank()) {
+                        artistArtworkCache[item.name.lowercase()] = item.artworkUrl
+                        artistArtworkCache[norm] = item.artworkUrl
+                    }
+                    val existing = merged[norm]
+                    if (existing == null) {
+                        merged[norm] = item
+                    } else if (existing.artworkUrl.isBlank() && item.artworkUrl.isNotBlank()) {
+                        merged[norm] = existing.copy(artworkUrl = item.artworkUrl)
+                    }
+                }
+                merged.values.take(limit).toList()
+            }
+        }
+
+    /**
+     * Resolves and caches cover art URLs for a list of artists (e.g., starter catalog artists and selected artists)
+     * so every artist chip/card in Preferences shows its real cover icon.
+     */
+    suspend fun resolveArtistArtworksBatch(
+        artistNames: Collection<String>,
+        existingMap: Map<String, String> = emptyMap()
+    ): Map<String, String> = withContext(Dispatchers.IO) {
+        existingMap.forEach { (k, v) ->
+            if (v.isNotBlank()) {
+                artistArtworkCache[k.lowercase()] = v
+                artistArtworkCache[TrackDeduplicationEngine.normalizeText(k)] = v
+            }
+        }
+
+        val missing = artistNames
+            .map { it.trim() }
+            .filter { name ->
+                name.isNotBlank() &&
+                    artistArtworkCache[name.lowercase()].isNullOrBlank() &&
+                    artistArtworkCache[TrackDeduplicationEngine.normalizeText(name)].isNullOrBlank()
+            }
+            .distinctBy { it.lowercase() }
+            .take(16)
+
+        if (missing.isNotEmpty()) {
+            coroutineScope {
+                missing.chunked(6).forEach { batch ->
+                    batch.map { artistName ->
+                        async {
+                            val suggestion = runCatching {
+                                deezerSource.searchArtists(artistName, limit = 1).firstOrNull()
+                                    ?: itunesSource.searchArtists(artistName, limit = 1).firstOrNull()
+                            }.getOrNull()
+                            val artUrl = suggestion?.artworkUrl.orEmpty()
+                            if (artUrl.isNotBlank()) {
+                                artistArtworkCache[artistName.lowercase()] = artUrl
+                                artistArtworkCache[TrackDeduplicationEngine.normalizeText(artistName)] = artUrl
+                            }
+                        }
+                    }.awaitAll()
+                }
+            }
+        }
+
+        val result = HashMap<String, String>(existingMap)
+        artistNames.forEach { name ->
+            val found = artistArtworkCache[name.lowercase()]
+                ?: artistArtworkCache[TrackDeduplicationEngine.normalizeText(name)]
+            if (!found.isNullOrBlank()) {
+                result[name] = found
+            }
+        }
+        result
+    }
+
+    /**
+     * Resolves collaborative-filtering similar artists for the user's top artists (combining
+     * `SlantWaveEngine.getRelatedArtistsFor` + live Deezer `/artist/{id}/related`).
+     */
+    suspend fun resolveRelatedArtistsForNames(artistNames: List<String>): List<String> =
+        withContext(Dispatchers.IO) {
+            val related = mutableListOf<String>()
+            // 1. Instant local similarity graph
+            artistNames.forEach { name ->
+                related.addAll(SlantWaveEngine.getRelatedArtistsFor(name))
+            }
+            // 2. Live Deezer collaborative filtering for up to 3 top user artists
+            coroutineScope {
+                artistNames.take(3).map { name ->
+                    async {
+                        val key = name.lowercase().trim()
+                        val cached = relatedArtistsCache[key]
+                        if (cached != null) {
+                            cached
+                        } else {
+                            val fetched = runCatching {
+                                deezerSource.fetchRelatedArtists(name, limit = 5).map { it.name }
+                            }.getOrDefault(emptyList())
+                            if (fetched.isNotEmpty()) {
+                                relatedArtistsCache[key] = fetched
+                            }
+                            fetched
+                        }
+                    }
+                }.awaitAll().forEach { related.addAll(it) }
+            }
+            val inputNorm = artistNames.map { TrackDeduplicationEngine.normalizeText(it) }.toSet()
+            related
+                .map { it.trim() }
+                .filter { it.isNotBlank() && TrackDeduplicationEngine.normalizeText(it) !in inputNorm }
+                .distinctBy { TrackDeduplicationEngine.normalizeText(it) }
+                .take(10)
+        }
+
+    /**
      * Parallel multi-query harvester for the SlantWave recommendation engine.
      */
     suspend fun fetchWavePool(
@@ -251,10 +405,10 @@ class CompositeMusicRepository(
         }
 
         coroutineScope {
-            val jobs = queries.take(4).flatMap { q ->
+            val jobs = queries.take(6).flatMap { q ->
                 targetSources.map { src ->
                     async {
-                        runCatching { src.search(q, limit = 8).tracks }.getOrDefault(emptyList())
+                        runCatching { src.search(q, limit = 14).tracks }.getOrDefault(emptyList())
                     }
                 }
             }
@@ -263,7 +417,6 @@ class CompositeMusicRepository(
 
         enrichWithRoomState(collected)
     }
-
 
     /**
      * Fetches and ranks personalized feeds & curated streams across active open providers in parallel,
@@ -278,67 +431,71 @@ class CompositeMusicRepository(
         likedArtists: Set<String> = emptySet(),
         dislikedTrackIds: Set<String> = emptySet()
     ): ExploreFeedData = withContext(Dispatchers.IO) {
-        val dnaSummary = com.example.domain.SlantWaveEngine.computeTasteDnaSummary(
+        val dnaSummary = SlantWaveEngine.computeTasteDnaSummary(
             tasteProfile = tasteProfile,
             favoriteTracks = favoriteTracks,
             playlistTracks = playlistTracks,
             historyTracks = historyTracks,
             likedArtists = likedArtists
         )
-        val queryPlan = com.example.domain.SlantWaveEngine.buildPersonalizedExploreQueries(
+
+        val relatedArtists = resolveRelatedArtistsForNames(dnaSummary.topArtists.take(4))
+
+        val queryPlan = SlantWaveEngine.buildPersonalizedExploreQueries(
             tasteProfile = tasteProfile,
-            dnaSummary = dnaSummary
+            dnaSummary = dnaSummary,
+            relatedArtists = relatedArtists
         )
 
-        val primaryGenreQuery = queryPlan.genreRadarQueries.firstOrNull() ?: "Synthwave Electronic Indie"
+        val primaryGenreQuery = queryPlan.genreRadarQueries.firstOrNull() ?: "Synthwave Electronic"
         val primaryArtistQuery = queryPlan.favoriteArtistsQueries.firstOrNull() ?: primaryGenreQuery
 
         coroutineScope {
             val forYouPoolDeferred = async {
                 runCatching {
-                    fetchWavePool(queryPlan.forYouQueries.take(3), enabledProviders)
+                    fetchWavePool(queryPlan.forYouQueries.take(5), enabledProviders)
                 }.getOrDefault(emptyList())
             }
             val artistPoolDeferred = async {
                 runCatching {
-                    fetchWavePool(queryPlan.favoriteArtistsQueries.take(3), enabledProviders)
+                    fetchWavePool(queryPlan.favoriteArtistsQueries.take(4), enabledProviders)
                 }.getOrDefault(emptyList())
             }
             val genrePoolDeferred = async {
                 runCatching {
-                    fetchWavePool(queryPlan.genreRadarQueries.take(3), enabledProviders)
+                    fetchWavePool(queryPlan.genreRadarQueries.take(4), enabledProviders)
                 }.getOrDefault(emptyList())
             }
 
             val jamendoDeferred = async {
                 runCatching {
                     if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty() || playlistTracks.isNotEmpty()) {
-                        jamendoSource.search(primaryGenreQuery, 10)
+                        jamendoSource.search(primaryGenreQuery, 14)
                     } else {
-                        jamendoSource.getTrending(10)
+                        jamendoSource.getTrending(14)
                     }
                 }.getOrNull()
             }
             val audiusDeferred = async {
                 runCatching {
                     if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty() || playlistTracks.isNotEmpty()) {
-                        audiusSource.search(primaryGenreQuery, 10)
+                        audiusSource.search(primaryGenreQuery, 14)
                     } else {
-                        audiusSource.getTrending(10)
+                        audiusSource.getTrending(14)
                     }
                 }.getOrNull()
             }
             val deezerDeferred = async {
                 runCatching {
                     if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty()) {
-                        deezerSource.search(primaryArtistQuery, 10)
+                        deezerSource.search(primaryArtistQuery, 16)
                     } else {
-                        deezerSource.getTrending(10)
+                        deezerSource.getTrending(16)
                     }
                 }.getOrNull()
             }
             val itunesDeferred = async {
-                runCatching { itunesSource.search(primaryGenreQuery, 10) }.getOrNull()
+                runCatching { itunesSource.search(primaryGenreQuery, 14) }.getOrNull()
             }
             val radioDeferred = async {
                 runCatching { radioSource.search(queryPlan.radioQuery, 8) }.getOrNull()
@@ -382,7 +539,7 @@ class CompositeMusicRepository(
                 )
             )
 
-            val personalForYouRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+            val personalForYouRanked = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = forYouRaw + artistRaw + genreRaw + favoriteTracks + playlistTracks + fullLengthRaw,
                 settings = com.example.domain.WaveSettings(),
                 tasteProfile = tasteProfile,
@@ -390,10 +547,11 @@ class CompositeMusicRepository(
                 playlistTracks = playlistTracks,
                 historyTracks = historyTracks,
                 likedArtists = likedArtists,
-                dislikedTrackIds = dislikedTrackIds
-            ).take(14)
+                dislikedTrackIds = dislikedTrackIds,
+                relatedArtists = relatedArtists.toSet()
+            ).take(16)
 
-            val favoriteArtistsRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+            val favoriteArtistsRanked = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = artistRaw + favoriteTracks + playlistTracks,
                 settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.FAVORITE),
                 tasteProfile = tasteProfile,
@@ -401,21 +559,23 @@ class CompositeMusicRepository(
                 playlistTracks = playlistTracks,
                 historyTracks = historyTracks,
                 likedArtists = likedArtists,
-                dislikedTrackIds = dislikedTrackIds
-            ).take(12)
+                dislikedTrackIds = dislikedTrackIds,
+                relatedArtists = relatedArtists.toSet()
+            ).take(14)
 
-            val genreRadarRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
-                rawCandidates = genreRaw + fullLengthRaw + globalChartsRaw,
+            val genreRadarRanked = SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = genreRaw + forYouRaw + fullLengthRaw,
                 settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.UNFAMILIAR),
                 tasteProfile = tasteProfile,
                 favoriteTracks = favoriteTracks,
                 playlistTracks = playlistTracks,
                 historyTracks = historyTracks,
                 likedArtists = likedArtists,
-                dislikedTrackIds = dislikedTrackIds
-            ).take(12)
+                dislikedTrackIds = dislikedTrackIds,
+                relatedArtists = relatedArtists.toSet()
+            ).take(14)
 
-            val fullLengthRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+            val fullLengthRanked = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = fullLengthRaw,
                 settings = com.example.domain.WaveSettings(),
                 tasteProfile = tasteProfile.copy(preferFullLengthTracks = true),
@@ -423,10 +583,11 @@ class CompositeMusicRepository(
                 playlistTracks = playlistTracks,
                 historyTracks = historyTracks,
                 likedArtists = likedArtists,
-                dislikedTrackIds = dislikedTrackIds
+                dislikedTrackIds = dislikedTrackIds,
+                relatedArtists = relatedArtists.toSet()
             )
 
-            val globalChartsRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+            val globalChartsRanked = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = globalChartsRaw,
                 settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.POPULAR),
                 tasteProfile = tasteProfile,
@@ -434,10 +595,16 @@ class CompositeMusicRepository(
                 playlistTracks = playlistTracks,
                 historyTracks = historyTracks,
                 likedArtists = likedArtists,
-                dislikedTrackIds = dislikedTrackIds
+                dislikedTrackIds = dislikedTrackIds,
+                relatedArtists = relatedArtists.toSet()
             )
 
             val liveRadio = radioDeferred.await()?.tracks.orEmpty()
+
+            // Pre-resolve the first 2 personal tracks in the background so initial playback is instant
+            personalForYouRanked.take(2).forEach { track ->
+                async { runCatching { prefetchTrackStream(track) } }
+            }
 
             ExploreFeedData(
                 personalForYouTracks = personalForYouRanked,
@@ -476,52 +643,154 @@ class CompositeMusicRepository(
         }
     }
 
+    /**
+     * Background pre-resolver for upcoming queue tracks so switching tracks is instantaneous (0ms).
+     */
+    suspend fun prefetchTrackStream(track: Track): String = withContext(Dispatchers.IO) {
+        if (track.isLiveStream) return@withContext track.streamUrl
+        val cached = resolvedStreamCache[track.id]
+        if (!cached.isNullOrBlank() && isDirectPlayableScheme(cached)) {
+            return@withContext cached
+        }
+        val primaryCandidate = track.allStreamCandidates().firstOrNull()
+        val rawUrl = primaryCandidate?.streamUrl ?: track.streamUrl
+        val provider = primaryCandidate?.provider ?: track.primaryProvider
+        resolvePlayableUrl(provider, rawUrl, track)
+    }
+
+    /**
+     * Resolves a playable audio URL with:
+     * 1. 0ms In-Memory Cache hit (`resolvedStreamCache`)
+     * 2. Full-Track Audio Upgrade for `fulltrack://` or 30s preview tracks (racing YouTube Music Piped/Invidious,
+     *    Audius, and Jamendo in parallel so full-length versions play instead of 30s teasers!)
+     * 3. Automatic fallback to direct HTTP streams so playback never fails.
+     */
     suspend fun resolvePlayableUrl(provider: SourceProvider, rawUrl: String, track: Track): String =
         withContext(Dispatchers.IO) {
+            // 1. Check in-memory resolved stream cache first (0ms instant switch!)
+            resolvedStreamCache[rawUrl]?.takeIf { isDirectPlayableScheme(it) }?.let {
+                return@withContext it
+            }
+            if (!rawUrl.startsWith("http")) {
+                resolvedStreamCache[track.id]?.takeIf { isDirectPlayableScheme(it) }?.let {
+                    return@withContext it
+                }
+            }
+
             if (isDirectPlayableScheme(rawUrl)) {
                 return@withContext rawUrl
             }
 
+            // 2. Handle `fulltrack://artist|title|duration` full-length audio upgrade
+            if (rawUrl.startsWith("fulltrack://")) {
+                val payload = rawUrl.removePrefix("fulltrack://")
+                val parts = payload.split("|")
+                val artist = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: track.artist
+                val title = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: track.title
+                val expectedDur = parts.getOrNull(2)?.toIntOrNull() ?: track.durationSec
+
+                val fullStream = withTimeoutOrNull(3800L) {
+                    coroutineScope {
+                        // Race YouTube Piped/Invidious full audio resolver + Audius + Jamendo in parallel
+                        val ytDeferred = async {
+                            runCatching {
+                                youtubeSource.resolveFullTrackByMetadata(artist, title, expectedDur)
+                            }.getOrNull()
+                        }
+                        val audiusDeferred = async {
+                            runCatching {
+                                val q = "$artist $title".trim()
+                                audiusSource.search(q, limit = 4).tracks.firstOrNull { cand ->
+                                    cand.durationSec >= 48 &&
+                                        TrackDeduplicationEngine.combinedSimilarity(cand.title, title) >= 0.78 &&
+                                        (TrackDeduplicationEngine.areArtistNamesEquivalent(cand.artist, artist) ||
+                                            TrackDeduplicationEngine.combinedSimilarity(cand.artist, artist) >= 0.72) &&
+                                        isDirectPlayableScheme(cand.streamUrl)
+                                }?.streamUrl
+                            }.getOrNull()
+                        }
+                        val jamendoDeferred = async {
+                            runCatching {
+                                val q = "$artist $title".trim()
+                                jamendoSource.search(q, limit = 4).tracks.firstOrNull { cand ->
+                                    cand.durationSec >= 48 &&
+                                        TrackDeduplicationEngine.combinedSimilarity(cand.title, title) >= 0.78 &&
+                                        (TrackDeduplicationEngine.areArtistNamesEquivalent(cand.artist, artist) ||
+                                            TrackDeduplicationEngine.combinedSimilarity(cand.artist, artist) >= 0.72) &&
+                                        isDirectPlayableScheme(cand.streamUrl)
+                                }?.streamUrl
+                            }.getOrNull()
+                        }
+
+                        ytDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
+                            ?: audiusDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
+                            ?: jamendoDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
+                    }
+                }
+
+                if (!fullStream.isNullOrBlank() && isDirectPlayableScheme(fullStream)) {
+                    resolvedStreamCache[rawUrl] = fullStream
+                    resolvedStreamCache[track.id] = fullStream
+                    return@withContext fullStream
+                }
+            }
+
+            // 3. Handle `ytm://` or `archive://` pseudo-URLs
             val candidateTrack = track.copy(primaryProvider = provider, streamUrl = rawUrl)
             val primaryResolved = when {
-                rawUrl.startsWith("ytm://") || provider == SourceProvider.YOUTUBE_PIPED ->
+                rawUrl.startsWith("ytm://") || (provider == SourceProvider.YOUTUBE_PIPED && !rawUrl.startsWith("fulltrack://")) ->
                     youtubeSource.resolvePlayableStreamUrl(candidateTrack)
                 rawUrl.startsWith("archive://") || provider == SourceProvider.INTERNET_ARCHIVE ->
                     archiveSource.resolvePlayableStreamUrl(candidateTrack)
-                else -> rawUrl
+                else -> null
             }
 
             if (primaryResolved != null && isDirectPlayableScheme(primaryResolved)) {
+                resolvedStreamCache[rawUrl] = primaryResolved
+                resolvedStreamCache[track.id] = primaryResolved
                 return@withContext primaryResolved
             }
 
-            // 1. Check any existing direct HTTP candidate in the track's fallbackStreams
+            // 4. Fallback to any existing direct HTTP candidate in the track's fallbackStreams
             val existingDirect = track.allStreamCandidates()
                 .map { it.streamUrl }
                 .firstOrNull { isDirectPlayableScheme(it) }
             if (existingDirect != null) {
+                resolvedStreamCache[track.id] = existingDirect
                 return@withContext existingDirect
             }
 
-            // 2. Live cross-provider resolution by artist + title (Deezer -> iTunes -> Jamendo)
+            // 5. Final live cross-provider fallback
             val searchQuery = "${track.artist} ${track.title}".trim()
-            val deezerFallback = runCatching {
-                deezerSource.search(searchQuery, limit = 3).tracks
-                    .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-            }.getOrNull()
-            if (deezerFallback != null) return@withContext deezerFallback
-
-            val itunesFallback = runCatching {
-                itunesSource.search(searchQuery, limit = 3).tracks
-                    .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-            }.getOrNull()
-            if (itunesFallback != null) return@withContext itunesFallback
-
-            val jamendoFallback = runCatching {
-                jamendoSource.search(track.title, limit = 3).tracks
-                    .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-            }.getOrNull()
-            if (jamendoFallback != null) return@withContext jamendoFallback
+            val fallbackUrl = withTimeoutOrNull(3500L) {
+                coroutineScope {
+                    val dz = async {
+                        runCatching {
+                            deezerSource.search(searchQuery, limit = 3).tracks
+                                .flatMap { it.allStreamCandidates() }
+                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
+                        }.getOrNull()
+                    }
+                    val itn = async {
+                        runCatching {
+                            itunesSource.search(searchQuery, limit = 3).tracks
+                                .flatMap { it.allStreamCandidates() }
+                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
+                        }.getOrNull()
+                    }
+                    val jam = async {
+                        runCatching {
+                            jamendoSource.search(track.title, limit = 3).tracks
+                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
+                        }.getOrNull()
+                    }
+                    dz.await() ?: itn.await() ?: jam.await()
+                }
+            }
+            if (!fallbackUrl.isNullOrBlank()) {
+                resolvedStreamCache[track.id] = fallbackUrl
+                return@withContext fallbackUrl
+            }
 
             ""
         }

@@ -58,6 +58,7 @@ class UserPreferencesRepository(private val context: Context) {
         val TASTE_DISCOVERY_BALANCE = stringPreferencesKey("taste_discovery_balance")
         val TASTE_PREFER_FULL_TRACKS = booleanPreferencesKey("taste_prefer_full_tracks")
         val TASTE_AUTO_ADAPT_COLLECTION = booleanPreferencesKey("taste_auto_adapt_collection")
+        val TASTE_ARTIST_ARTWORKS = stringSetPreferencesKey("taste_artist_artworks")
         val DISLIKED_TRACK_IDS = stringSetPreferencesKey("disliked_track_ids")
     }
 
@@ -103,6 +104,15 @@ class UserPreferencesRepository(private val context: Context) {
 
         val discoveryBalance = TasteDiscoveryBalance.fromId(prefs[Keys.TASTE_DISCOVERY_BALANCE])
 
+        val artworksMap = prefs[Keys.TASTE_ARTIST_ARTWORKS].orEmpty().mapNotNull { entry ->
+            val idx = entry.indexOf("||")
+            if (idx > 0) {
+                val artName = entry.substring(0, idx).trim()
+                val artUrl = entry.substring(idx + 2).trim()
+                if (artName.isNotBlank() && artUrl.isNotBlank()) artName to artUrl else null
+            } else null
+        }.toMap()
+
         val tasteProfile = UserTasteProfile(
             isOnboardingCompleted = prefs[Keys.TASTE_ONBOARDING_DONE] ?: false,
             selectedGenreIds = prefs[Keys.TASTE_GENRES].orEmpty(),
@@ -112,7 +122,8 @@ class UserPreferencesRepository(private val context: Context) {
             preferredEras = preferredEras,
             discoveryBalance = discoveryBalance,
             preferFullLengthTracks = prefs[Keys.TASTE_PREFER_FULL_TRACKS] ?: true,
-            autoAdaptFromCollection = prefs[Keys.TASTE_AUTO_ADAPT_COLLECTION] ?: true
+            autoAdaptFromCollection = prefs[Keys.TASTE_AUTO_ADAPT_COLLECTION] ?: true,
+            artistArtworks = artworksMap
         )
 
         AppUserSettings(
@@ -175,6 +186,16 @@ class UserPreferencesRepository(private val context: Context) {
             prefs[Keys.TASTE_DISCOVERY_BALANCE] = profile.discoveryBalance.id
             prefs[Keys.TASTE_PREFER_FULL_TRACKS] = profile.preferFullLengthTracks
             prefs[Keys.TASTE_AUTO_ADAPT_COLLECTION] = profile.autoAdaptFromCollection
+            if (profile.artistArtworks.isNotEmpty()) {
+                val currentSet = prefs[Keys.TASTE_ARTIST_ARTWORKS].orEmpty().toMutableSet()
+                profile.artistArtworks.forEach { (k, v) ->
+                    if (k.isNotBlank() && v.isNotBlank()) {
+                        currentSet.removeAll { it.startsWith("${k.trim()}||", ignoreCase = true) }
+                        currentSet.add("${k.trim()}||${v.trim()}")
+                    }
+                }
+                prefs[Keys.TASTE_ARTIST_ARTWORKS] = currentSet
+            }
         }
     }
 
