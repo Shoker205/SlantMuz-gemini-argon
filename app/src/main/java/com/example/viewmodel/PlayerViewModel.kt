@@ -13,17 +13,28 @@ import com.example.data.remote.CompositeMusicRepository
 import com.example.data.remote.ExploreFeedData
 import com.example.data.remote.FirebaseRemoteConfigManager
 import com.example.data.remote.LyricsRepository
+import com.example.domain.AlbumSummary
 import com.example.domain.ArtistBioInfo
+import com.example.domain.ArtistProfile
 import com.example.domain.DspState
 import com.example.domain.EqualizerPreset
 import com.example.domain.LrcParser
 import com.example.domain.ProviderHealthStatus
 import com.example.domain.RemoteStreamingConfig
+import com.example.domain.SearchSortMode
+import com.example.domain.SlantWaveEngine
+import com.example.domain.SmartPlaylistPreset
 import com.example.domain.SourceFilter
 import com.example.domain.SourceProvider
 import com.example.domain.StreamCandidate
 import com.example.domain.SyncedLyrics
 import com.example.domain.Track
+import com.example.domain.TrackDeduplicationEngine
+import com.example.domain.WaveActivity
+import com.example.domain.WaveCharacter
+import com.example.domain.WaveLanguage
+import com.example.domain.WaveMood
+import com.example.domain.WaveSettings
 import com.example.player.ExoPlayerCacheProvider
 import com.example.player.PlaybackUiState
 import com.example.player.PlayerController
@@ -90,6 +101,10 @@ class PlayerViewModel(
     private val _selectedSourceFilter = MutableStateFlow(SourceFilter.ALL)
     val selectedSourceFilter: StateFlow<SourceFilter> = _selectedSourceFilter.asStateFlow()
 
+    private val _searchSortMode = MutableStateFlow(SearchSortMode.RELEVANCE)
+    val searchSortMode: StateFlow<SearchSortMode> = _searchSortMode.asStateFlow()
+
+    private val _rawSearchResults = MutableStateFlow<List<Track>>(emptyList())
     private val _searchResults = MutableStateFlow<List<Track>>(emptyList())
     val searchResults: StateFlow<List<Track>> = _searchResults.asStateFlow()
 
@@ -111,7 +126,26 @@ class PlayerViewModel(
     private val _exoCacheUsedBytes = MutableStateFlow(0L)
     val exoCacheUsedBytes: StateFlow<Long> = _exoCacheUsedBytes.asStateFlow()
 
+    private val _waveSettings = MutableStateFlow(WaveSettings())
+    val waveSettings: StateFlow<WaveSettings> = _waveSettings.asStateFlow()
+
+    private val _isWaveGenerating = MutableStateFlow(false)
+    val isWaveGenerating: StateFlow<Boolean> = _isWaveGenerating.asStateFlow()
+
+    private val _waveQueueTracks = MutableStateFlow<List<Track>>(emptyList())
+    val waveQueueTracks: StateFlow<List<Track>> = _waveQueueTracks.asStateFlow()
+
+    private val _dislikedTrackIds = MutableStateFlow<Set<String>>(emptySet())
+    val dislikedTrackIds: StateFlow<Set<String>> = _dislikedTrackIds.asStateFlow()
+
+    private val _likedArtistNames = MutableStateFlow<Set<String>>(emptySet())
+    val likedArtistNames: StateFlow<Set<String>> = _likedArtistNames.asStateFlow()
+
+    private val _selectedArtistProfile = MutableStateFlow<ArtistProfile?>(null)
+    val selectedArtistProfile: StateFlow<ArtistProfile?> = _selectedArtistProfile.asStateFlow()
+
     private var searchDebounceJob: Job? = null
+    private var waveGenerationJob: Job? = null
 
     init {
         playerController.attachResolvers(
@@ -143,13 +177,464 @@ class PlayerViewModel(
             _exploreFeed.value = feed
             _isExploreLoading.value = false
 
-            // Pre-select first track in player state if none is loaded yet (without auto-playing)
             if (playbackState.value.currentTrack == null) {
                 val initialQueue = feed.trendingFullStreams.ifEmpty { feed.globalChartTracks }
                 val first = initialQueue.firstOrNull()
                 if (first != null) {
                     loadLyricsAndBioForTrack(first)
                 }
+            }
+        }
+    }
+
+    // --- "МОЯ ВОЛНА" (SLANTWAVE) MULTI-DIMENSIONAL ALGORITHMIC ENGINE ---
+
+    fun updateWaveSettings(newSettings: WaveSettings) {
+        _waveSettings.value = newSettings
+    }
+
+    fun resetWaveSettings() {
+        val reset = WaveSettings(contextLabel = "Моя волна")
+        _waveSettings.value = reset
+        if (_waveQueueTracks.value.isNotEmpty()) {
+            launchWave(reset)
+        }
+    }
+
+    /**
+     * Toggles a quick mood/activity/character/language chip from ExploreScreen and immediately
+     * synthesizes and plays the updated Wave stream.
+     */
+    fun toggleQuickWaveChip(chipLabel: String) {
+        val current = _waveSettings.value
+        val updated = when (chipLabel) {
+            "Бодрое" -> current.copy(mood = if (current.mood == WaveMood.ENERGETIC) null else WaveMood.ENERGETIC)
+            "Весёлое" -> current.copy(mood = if (current.mood == WaveMood.CHEERFUL) null else WaveMood.CHEERFUL)
+            "Спокойное" -> current.copy(mood = if (current.mood == WaveMood.CALM) null else WaveMood.CALM)
+            "Грустное" -> current.copy(mood = if (current.mood == WaveMood.SAD) null else WaveMood.SAD)
+            "Просыпаюсь" -> current.copy(activity = if (current.activity == WaveActivity.WAKING_UP) null else WaveActivity.WAKING_UP)
+            "В дороге" -> current.copy(activity = if (current.activity == WaveActivity.ON_THE_ROAD) null else WaveActivity.ON_THE_ROAD)
+            "Работаю" -> current.copy(activity = if (current.activity == WaveActivity.WORKING) null else WaveActivity.WORKING)
+            "Тренируюсь" -> current.copy(activity = if (current.activity == WaveActivity.WORKOUT) null else WaveActivity.WORKOUT)
+            "Засыпаю" -> current.copy(activity = if (current.activity == WaveActivity.FALLING_ASLEEP) null else WaveActivity.FALLING_ASLEEP)
+            "Любимое" -> current.copy(character = if (current.character == WaveCharacter.FAVORITE) null else WaveCharacter.FAVORITE)
+            "Незнакомое" -> current.copy(character = if (current.character == WaveCharacter.UNFAMILIAR) null else WaveCharacter.UNFAMILIAR)
+            "Популярное" -> current.copy(character = if (current.character == WaveCharacter.POPULAR) null else WaveCharacter.POPULAR)
+            "Русский" -> current.copy(language = if (current.language == WaveLanguage.RUSSIAN) null else WaveLanguage.RUSSIAN)
+            "Иностранный" -> current.copy(language = if (current.language == WaveLanguage.FOREIGN) null else WaveLanguage.FOREIGN)
+            "Без слов" -> current.copy(language = if (current.language == WaveLanguage.INSTRUMENTAL) null else WaveLanguage.INSTRUMENTAL)
+            else -> current
+        }
+        launchWave(updated)
+    }
+
+    fun launchWave(settings: WaveSettings = _waveSettings.value) {
+        val label = if (settings.isCustomized) {
+            "Моя волна • ${settings.summarySubtitle()}"
+        } else {
+            "Моя волна"
+        }
+        val activeSettings = settings.copy(contextLabel = label)
+        _waveSettings.value = activeSettings
+
+        // Auto-sync DSP equalizer preset to match the wave's acoustic character
+        if (activeSettings.autoSyncEqualizer && activeSettings.isCustomized) {
+            val recommendedPreset = SlantWaveEngine.recommendedEqualizerPreset(activeSettings)
+            playerController.audioEffectsManager.selectPreset(recommendedPreset)
+            saveCurrentDsp()
+        }
+
+        waveGenerationJob?.cancel()
+        waveGenerationJob = viewModelScope.launch {
+            _isWaveGenerating.value = true
+
+            val targetedQueries = SlantWaveEngine.buildTargetedWaveQueries(
+                settings = activeSettings,
+                favoriteTracks = favoriteTracks.value,
+                historyTracks = historyTracks.value,
+                likedArtists = _likedArtistNames.value
+            )
+
+            val remoteHarvested = runCatching {
+                musicRepository.fetchWavePool(
+                    queries = targetedQueries,
+                    enabledProviders = userSettings.value.enabledProviders
+                )
+            }.getOrDefault(emptyList())
+
+            val basePool = buildList {
+                when (activeSettings.character) {
+                    WaveCharacter.FAVORITE -> {
+                        addAll(favoriteTracks.value)
+                        addAll(historyTracks.value)
+                        addAll(remoteHarvested)
+                        addAll(_localTracks.value)
+                    }
+                    WaveCharacter.UNFAMILIAR -> {
+                        addAll(remoteHarvested)
+                        addAll(_exploreFeed.value.trendingFullStreams)
+                        addAll(_exploreFeed.value.globalChartTracks)
+                    }
+                    WaveCharacter.POPULAR -> {
+                        addAll(_exploreFeed.value.globalChartTracks)
+                        addAll(remoteHarvested)
+                        addAll(_exploreFeed.value.trendingFullStreams)
+                    }
+                    null -> {
+                        addAll(remoteHarvested)
+                        addAll(favoriteTracks.value)
+                        addAll(_exploreFeed.value.trendingFullStreams)
+                        addAll(_exploreFeed.value.globalChartTracks)
+                        addAll(_localTracks.value)
+                    }
+                }
+            }
+
+            val rankedWaveQueue = SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = basePool,
+                settings = activeSettings,
+                favoriteTracks = favoriteTracks.value,
+                historyTracks = historyTracks.value,
+                likedArtists = _likedArtistNames.value,
+                dislikedTrackIds = _dislikedTrackIds.value
+            )
+
+            _waveQueueTracks.value = rankedWaveQueue
+            _isWaveGenerating.value = false
+
+            val first = rankedWaveQueue.firstOrNull()
+            if (first != null) {
+                playTrack(first, rankedWaveQueue)
+            }
+        }
+    }
+
+    fun launchTrackWave(seedTrack: Track) {
+        val currentSettings = _waveSettings.value.copy(
+            contextLabel = "Волна по треку • ${seedTrack.title}"
+        )
+        _waveSettings.value = currentSettings
+        waveGenerationJob?.cancel()
+        waveGenerationJob = viewModelScope.launch {
+            _isWaveGenerating.value = true
+            val primaryArtist = TrackDeduplicationEngine.extractPrimaryArtistName(seedTrack.artist)
+            val queries = listOfNotNull(
+                "$primaryArtist ${seedTrack.genre}".trim(),
+                primaryArtist,
+                seedTrack.genre.takeIf { it.isNotBlank() && it != "Music" }
+            ).distinct()
+
+            val similar = runCatching {
+                musicRepository.fetchWavePool(
+                    queries = queries,
+                    enabledProviders = userSettings.value.enabledProviders
+                )
+            }.getOrDefault(emptyList())
+
+            val filteredSimilar = SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = similar + _exploreFeed.value.trendingFullStreams,
+                settings = currentSettings,
+                favoriteTracks = favoriteTracks.value,
+                historyTracks = historyTracks.value,
+                likedArtists = _likedArtistNames.value,
+                dislikedTrackIds = _dislikedTrackIds.value
+            )
+
+            val waveQueue = (listOf(seedTrack) + filteredSimilar)
+                .distinctBy { it.id }
+                .filterNot { it.id in _dislikedTrackIds.value }
+
+            _waveQueueTracks.value = waveQueue
+            _isWaveGenerating.value = false
+            playTrack(seedTrack, waveQueue)
+        }
+    }
+
+    fun launchArtistWave(artistName: String) {
+        val cleanArtist = TrackDeduplicationEngine.extractPrimaryArtistName(artistName)
+        val currentSettings = _waveSettings.value.copy(
+            contextLabel = "Волна артиста • $cleanArtist"
+        )
+        _waveSettings.value = currentSettings
+        waveGenerationJob?.cancel()
+        waveGenerationJob = viewModelScope.launch {
+            _isWaveGenerating.value = true
+            val artistTracks = runCatching {
+                musicRepository.searchMultiSource(
+                    query = cleanArtist,
+                    enabledProviders = userSettings.value.enabledProviders,
+                    filter = SourceFilter.ALL
+                )
+            }.getOrDefault(emptyList())
+
+            val verifiedArtistTracks = artistTracks.filter {
+                TrackDeduplicationEngine.isTrackByArtist(it, cleanArtist)
+            }
+
+            val waveQueue = (verifiedArtistTracks.ifEmpty { artistTracks })
+                .distinctBy { "${TrackDeduplicationEngine.normalizeText(it.artist)}|${TrackDeduplicationEngine.normalizeText(it.title)}" }
+                .filterNot { it.id in _dislikedTrackIds.value || it.isLiveStream }
+
+            _waveQueueTracks.value = waveQueue
+            _isWaveGenerating.value = false
+            val first = waveQueue.firstOrNull()
+            if (first != null) {
+                playTrack(first, waveQueue)
+            }
+        }
+    }
+
+    fun launchCollectionWave() {
+        val settings = _waveSettings.value.copy(
+            character = WaveCharacter.FAVORITE,
+            contextLabel = "Моя волна • Коллекция"
+        )
+        launchWave(settings)
+    }
+
+    fun launchLikedPlaylistWave() {
+        val settings = _waveSettings.value.copy(
+            character = WaveCharacter.FAVORITE,
+            contextLabel = "Волна • Мне нравится"
+        )
+        launchWave(settings)
+    }
+
+    // --- ARTIST PROFILE BUILDER (STRICT SINGLE-SOURCE ISOLATION — NO CROSS-SOURCE MIXING) ---
+
+    fun openArtistProfile(artistName: String, preferredProvider: SourceProvider? = null) {
+        val cleanName = TrackDeduplicationEngine.extractPrimaryArtistName(artistName).ifBlank {
+            artistName.trim()
+        }
+        if (cleanName.isBlank()) return
+
+        // If the currently playing track or recently clicked track is by this artist, infer its provider
+        val inferredProvider = preferredProvider ?: playbackState.value.currentTrack
+            ?.takeIf { TrackDeduplicationEngine.isTrackByArtist(it, cleanName) }
+            ?.primaryProvider
+
+        val allKnown = (
+            favoriteTracks.value +
+                historyTracks.value +
+                _localTracks.value +
+                _rawSearchResults.value +
+                _exploreFeed.value.trendingFullStreams +
+                _exploreFeed.value.globalChartTracks
+            )
+
+        val initialGrouped = TrackDeduplicationEngine.groupArtistTracksByProvider(allKnown, cleanName)
+        val initialActiveProvider = inferredProvider?.takeIf { it in initialGrouped.keys }
+            ?: initialGrouped.keys.firstOrNull()
+            ?: inferredProvider
+            ?: SourceProvider.ITUNES
+
+        val isLiked = cleanName in _likedArtistNames.value
+
+        _selectedArtistProfile.value = buildArtistProfileObject(
+            name = cleanName,
+            tracksByProvider = initialGrouped,
+            activeProvider = initialActiveProvider,
+            isLiked = isLiked,
+            isLoading = true,
+            bioText = _artistBio.value?.takeIf {
+                it.artistName.equals(cleanName, ignoreCase = true)
+            }?.biography.orEmpty()
+        )
+
+        viewModelScope.launch {
+            val groupedByProvider = runCatching {
+                musicRepository.fetchArtistCatalogByProvider(
+                    artistName = cleanName,
+                    enabledProviders = userSettings.value.enabledProviders,
+                    existingKnownTracks = allKnown
+                )
+            }.getOrDefault(initialGrouped)
+
+            val bio = runCatching {
+                lyricsRepository.fetchArtistBio(cleanName)
+            }.getOrNull()
+
+            val chosenProvider = inferredProvider?.takeIf { it in groupedByProvider.keys }
+                ?: groupedByProvider.keys.firstOrNull()
+                ?: initialActiveProvider
+
+            _selectedArtistProfile.value = buildArtistProfileObject(
+                name = cleanName,
+                tracksByProvider = groupedByProvider,
+                activeProvider = chosenProvider,
+                isLiked = cleanName in _likedArtistNames.value,
+                isLoading = false,
+                bioText = bio?.biography.orEmpty(),
+                bannerOverride = bio?.bannerUrl.orEmpty()
+            )
+        }
+    }
+
+    /**
+     * Switches the active source provider in the Artist Profile so only tracks from
+     * that single selected provider are displayed (no mixing across providers).
+     */
+    fun selectArtistProvider(provider: SourceProvider) {
+        val current = _selectedArtistProfile.value ?: return
+        if (provider !in current.tracksByProvider.keys) return
+        _selectedArtistProfile.value = buildArtistProfileObject(
+            name = current.name,
+            tracksByProvider = current.tracksByProvider,
+            activeProvider = provider,
+            isLiked = current.isLiked,
+            isLoading = current.isLoading,
+            bioText = current.biography,
+            bannerOverride = current.avatarUrl
+        )
+    }
+
+    private fun buildArtistProfileObject(
+        name: String,
+        tracksByProvider: Map<SourceProvider, List<Track>>,
+        activeProvider: SourceProvider,
+        isLiked: Boolean,
+        isLoading: Boolean,
+        bioText: String,
+        bannerOverride: String = ""
+    ): ArtistProfile {
+        val isolatedTracks = tracksByProvider[activeProvider].orEmpty()
+        val allVerifiedTracks = tracksByProvider.values.flatten()
+
+        val heroUrl = bannerOverride.ifBlank {
+            isolatedTracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl
+                ?: allVerifiedTracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl
+                ?: ""
+        }
+
+        val latest = isolatedTracks.firstOrNull()
+        val albumGroups = isolatedTracks
+            .groupBy { it.album.ifBlank { "${it.title} — Single" } }
+            .entries
+            .mapIndexed { idx, (albumTitle, albumTracks) ->
+                AlbumSummary(
+                    id = "alb_${name}_${activeProvider.name}_$idx",
+                    title = albumTitle,
+                    artist = name,
+                    artworkUrl = albumTracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl ?: heroUrl,
+                    releaseYear = albumTracks.firstOrNull()?.releaseYear.orEmpty(),
+                    tracks = albumTracks
+                )
+            }
+
+        return ArtistProfile(
+            name = name,
+            avatarUrl = heroUrl,
+            isLiked = isLiked,
+            isLoading = isLoading,
+            biography = bioText,
+            activeProvider = activeProvider,
+            availableProviders = tracksByProvider.keys.toList(),
+            tracksByProvider = tracksByProvider,
+            latestRelease = latest,
+            popularTracks = isolatedTracks,
+            albums = albumGroups
+        )
+    }
+
+    fun toggleLikeArtist(artistName: String) {
+        val currentSet = _likedArtistNames.value
+        val updated = if (artistName in currentSet) {
+            currentSet - artistName
+        } else {
+            currentSet + artistName
+        }
+        _likedArtistNames.value = updated
+        _selectedArtistProfile.value = _selectedArtistProfile.value?.copy(
+            isLiked = artistName in updated
+        )
+    }
+
+    // --- SMART ALGORITHMIC PLAYLIST GENERATOR ---
+
+    fun generateSmartPlaylist(preset: SmartPlaylistPreset, playImmediately: Boolean = true) {
+        viewModelScope.launch {
+            val remotePool = runCatching {
+                musicRepository.searchMultiSource(
+                    query = preset.defaultQuery,
+                    enabledProviders = userSettings.value.enabledProviders,
+                    filter = SourceFilter.ALL
+                )
+            }.getOrDefault(emptyList())
+
+            val presetSettings = when (preset) {
+                SmartPlaylistPreset.MY_TOP_HITS -> WaveSettings(character = WaveCharacter.FAVORITE)
+                SmartPlaylistPreset.NIGHT_FOCUS -> WaveSettings(
+                    activity = WaveActivity.WORKING,
+                    mood = WaveMood.CALM,
+                    language = WaveLanguage.INSTRUMENTAL
+                )
+                SmartPlaylistPreset.WORKOUT_ENERGY -> WaveSettings(
+                    activity = WaveActivity.WORKOUT,
+                    mood = WaveMood.ENERGETIC
+                )
+                SmartPlaylistPreset.DISCOVERY_RADAR -> WaveSettings(
+                    character = WaveCharacter.UNFAMILIAR
+                )
+            }
+
+            val combined = (
+                favoriteTracks.value +
+                    historyTracks.value +
+                    remotePool +
+                    _exploreFeed.value.trendingFullStreams +
+                    _exploreFeed.value.globalChartTracks +
+                    _localTracks.value
+                )
+
+            val curated = SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = combined,
+                settings = presetSettings,
+                favoriteTracks = favoriteTracks.value,
+                historyTracks = historyTracks.value,
+                likedArtists = _likedArtistNames.value,
+                dislikedTrackIds = _dislikedTrackIds.value
+            ).take(20)
+
+            if (curated.isNotEmpty()) {
+                val playlistId = musicRepository.createPlaylist(
+                    name = preset.title,
+                    description = "${preset.description} (${curated.size} треков)"
+                )
+                curated.forEach { track ->
+                    musicRepository.addTrackToPlaylist(playlistId, track)
+                }
+                if (playImmediately) {
+                    playTrack(curated.first(), curated)
+                }
+            }
+        }
+    }
+
+    // --- TRAILER (30s HIGHLIGHT), DISLIKE, QUEUE MANAGEMENT ---
+
+    fun playTrailerHighlight(track: Track) {
+        playTrack(track, listOf(track))
+        viewModelScope.launch {
+            delay(450L)
+            val targetMs = ((track.durationSec.coerceAtLeast(90)) * 350L).coerceAtLeast(25_000L)
+            playerController.seekTo(targetMs)
+        }
+    }
+
+    fun dislikeTrack(track: Track) {
+        _dislikedTrackIds.value = _dislikedTrackIds.value + track.id
+        _waveQueueTracks.value = _waveQueueTracks.value.filterNot { it.id == track.id }
+        if (playbackState.value.currentTrack?.id == track.id) {
+            playerController.skipNext()
+        }
+    }
+
+    fun removeTrackFromQueue(track: Track) {
+        val currentQueue = playbackState.value.queue.filterNot { it.id == track.id }
+        if (playbackState.value.currentTrack?.id == track.id) {
+            val next = currentQueue.firstOrNull()
+            if (next != null) {
+                playTrack(next, currentQueue)
             }
         }
     }
@@ -165,6 +650,7 @@ class PlayerViewModel(
         _searchQuery.value = query
         searchDebounceJob?.cancel()
         if (query.isBlank()) {
+            _rawSearchResults.value = emptyList()
             _searchResults.value = emptyList()
             _isSearching.value = false
             return
@@ -193,6 +679,26 @@ class PlayerViewModel(
         }
     }
 
+    fun selectSearchSortMode(sortMode: SearchSortMode) {
+        _searchSortMode.value = sortMode
+        _searchResults.value = applySearchSort(_rawSearchResults.value, sortMode)
+    }
+
+    private fun applySearchSort(tracks: List<Track>, sortMode: SearchSortMode): List<Track> {
+        return when (sortMode) {
+            SearchSortMode.RELEVANCE -> tracks
+            SearchSortMode.FULL_TRACKS_FIRST -> tracks.sortedWith(
+                compareByDescending<Track> { !it.isPreviewOnly && it.durationSec > 35 }
+                    .thenByDescending { it.durationSec }
+            )
+            SearchSortMode.QUALITY_HIGH -> tracks.sortedByDescending {
+                it.primaryProvider.defaultBitrateKbps + (if (!it.isPreviewOnly) 200 else 0)
+            }
+            SearchSortMode.DURATION_DESC -> tracks.sortedByDescending { it.durationSec }
+            SearchSortMode.ALPHABETICAL -> tracks.sortedBy { it.title.lowercase() }
+        }
+    }
+
     private suspend fun executeSearch(query: String) {
         _isSearching.value = true
         val results = musicRepository.searchMultiSource(
@@ -200,7 +706,8 @@ class PlayerViewModel(
             enabledProviders = userSettings.value.enabledProviders,
             filter = _selectedSourceFilter.value
         )
-        _searchResults.value = results
+        _rawSearchResults.value = results
+        _searchResults.value = applySearchSort(results, _searchSortMode.value)
         _isSearching.value = false
     }
 
@@ -212,12 +719,7 @@ class PlayerViewModel(
     fun togglePlayPause() {
         val current = playbackState.value.currentTrack
         if (current == null) {
-            val fallbackQueue = _exploreFeed.value.trendingFullStreams
-                .ifEmpty { _exploreFeed.value.globalChartTracks }
-            val first = fallbackQueue.firstOrNull()
-            if (first != null) {
-                playTrack(first, fallbackQueue)
-            }
+            launchWave(_waveSettings.value)
             return
         }
         playerController.togglePlayPause()
@@ -257,6 +759,9 @@ class PlayerViewModel(
             if (playbackState.value.currentTrack?.id == track.id) {
                 playerController.updateCurrentTrackFavoriteState(isFav)
             }
+            _rawSearchResults.value = _rawSearchResults.value.map {
+                if (it.id == track.id) it.copy(isFavorite = isFav) else it
+            }
             _searchResults.value = _searchResults.value.map {
                 if (it.id == track.id) it.copy(isFavorite = isFav) else it
             }
@@ -269,6 +774,9 @@ class PlayerViewModel(
             _downloadingTrackIds.value = _downloadingTrackIds.value + track.id
             val updated = musicRepository.downloadTrackForOffline(track)
             _downloadingTrackIds.value = _downloadingTrackIds.value - track.id
+            _rawSearchResults.value = _rawSearchResults.value.map {
+                if (it.id == track.id) updated else it
+            }
             _searchResults.value = _searchResults.value.map {
                 if (it.id == track.id) updated else it
             }

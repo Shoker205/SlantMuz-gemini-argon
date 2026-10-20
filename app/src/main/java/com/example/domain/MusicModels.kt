@@ -60,6 +60,119 @@ enum class SourceProvider(
 }
 
 @Serializable
+enum class WaveActivity(val title: String, val searchQueryKeyword: String) {
+    WAKING_UP("Просыпаюсь", "Morning Upbeat Chill Indie"),
+    ON_THE_ROAD("В дороге", "Synthwave Drive Electronic"),
+    WORKING("Работаю", "Lo-Fi Focus Ambient Instrumental"),
+    WORKOUT("Тренируюсь", "Phonk Electro Bass Workout"),
+    FALLING_ASLEEP("Засыпаю", "Ambient Calm Sleep Piano")
+}
+
+@Serializable
+enum class WaveCharacter(val title: String, val queryHint: String) {
+    FAVORITE("Любимое", "Best Hits"),
+    UNFAMILIAR("Незнакомое", "Underground Indie Fresh"),
+    POPULAR("Популярное", "Top Chart Trending")
+}
+
+@Serializable
+enum class WaveMood(val title: String, val queryHint: String) {
+    ENERGETIC("Бодрое", "Energetic Dance Upbeat"),
+    CHEERFUL("Весёлое", "Happy Pop Funk"),
+    CALM("Спокойное", "Chill Acoustic Soft"),
+    SAD("Грустное", "Melancholic Slowed Sad")
+}
+
+@Serializable
+enum class WaveLanguage(val title: String, val queryHint: String) {
+    RUSSIAN("Русский", "Russian Post-Punk Hip-Hop"),
+    FOREIGN("Иностранный", "Global Pop Rock Electronic"),
+    INSTRUMENTAL("Без слов", "Instrumental Chillhop Synth")
+}
+
+@Serializable
+data class WaveSettings(
+    val activity: WaveActivity? = null,
+    val character: WaveCharacter? = null,
+    val mood: WaveMood? = null,
+    val language: WaveLanguage? = null,
+    val autoSyncEqualizer: Boolean = true,
+    val contextLabel: String = "Моя волна"
+) {
+    val isCustomized: Boolean
+        get() = activity != null || character != null || mood != null || language != null
+
+    val activeFilterCount: Int
+        get() = listOfNotNull(activity, character, mood, language).size
+
+    fun summarySubtitle(): String {
+        val parts = listOfNotNull(
+            activity?.title,
+            character?.title,
+            mood?.title,
+            language?.title
+        )
+        return if (parts.isEmpty()) "Персональный поток SlantWave • Авто-подбор" else parts.joinToString(" • ")
+    }
+
+    fun buildSearchQuery(): String {
+        val parts = listOfNotNull(
+            activity?.searchQueryKeyword,
+            character?.queryHint,
+            mood?.queryHint,
+            language?.queryHint
+        )
+        return if (parts.isEmpty()) "Electronic Indie Synth" else parts.joinToString(" ")
+    }
+}
+
+@Serializable
+enum class SearchSortMode(val title: String) {
+    RELEVANCE("Релевантность"),
+    FULL_TRACKS_FIRST("Полные треки"),
+    QUALITY_HIGH("Битрейт HD"),
+    DURATION_DESC("По длительности"),
+    ALPHABETICAL("По алфавиту")
+}
+
+@Serializable
+enum class CollectionSortMode(val title: String) {
+    RECENT("Недавние"),
+    TITLE_AZ("По названию (А–Я)"),
+    ARTIST_AZ("По артисту"),
+    DURATION("По длительности"),
+    SOURCE("По источнику")
+}
+
+@Serializable
+enum class SmartPlaylistPreset(
+    val title: String,
+    val description: String,
+    val defaultQuery: String
+) {
+    MY_TOP_HITS(
+        title = "Мои Топ-Хиты",
+        description = "Любимые треки и лидеры истории прослушиваний",
+        defaultQuery = "Top Hits Electronic Indie"
+    ),
+    NIGHT_FOCUS(
+        title = "Ночной Фокус & Чилл",
+        description = "Инструментальный Lo-Fi, эмбиент и спокойные треки без слов",
+        defaultQuery = "Lofi Chillhop Ambient Instrumental"
+    ),
+    WORKOUT_ENERGY(
+        title = "Драйв & Тренировка",
+        description = "Бодрый электро-драйв, синтвейв, фонк и рок",
+        defaultQuery = "Synthwave Phonk Electro Workout"
+    ),
+    DISCOVERY_RADAR(
+        title = "Радар Открытий",
+        description = "Свежие треки артистов, которых ещё нет в вашей истории",
+        defaultQuery = "Underground Indie Fresh Electronic"
+    )
+}
+
+@Serializable
 data class StreamCandidate(
     val provider: SourceProvider,
     val streamUrl: String,
@@ -127,6 +240,62 @@ data class Track(
             }
         }
         return list
+    }
+}
+
+@Serializable
+data class AlbumSummary(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val artworkUrl: String,
+    val releaseYear: String = "",
+    val tracks: List<Track> = emptyList()
+)
+
+@Serializable
+data class ArtistProfile(
+    val name: String,
+    val avatarUrl: String,
+    val isLiked: Boolean = false,
+    val isLoading: Boolean = false,
+    val biography: String = "",
+    val activeProvider: SourceProvider = SourceProvider.ITUNES,
+    val availableProviders: List<SourceProvider> = emptyList(),
+    val tracksByProvider: Map<SourceProvider, List<Track>> = emptyMap(),
+    val latestRelease: Track? = null,
+    val popularTracks: List<Track> = emptyList(),
+    val albums: List<AlbumSummary> = emptyList()
+)
+
+@Serializable
+enum class LibrarySubCategory(val id: String, val title: String, val subtitle: String) {
+    PLAYLISTS("playlists", "Плейлисты", "Ваши подборки и умные авто-плейлисты"),
+    OFFLINE("offline", "Скачанные треки", "Сохранённые в оффлайн-кэш композиции"),
+    LOCAL_FILES("local_files", "Файлы на устройстве", "Локальная аудиотека смартфона (MediaStore)"),
+    ALBUMS("albums", "Альбомы и релизы", "Альбомы и синглы из вашей коллекции"),
+    ARTISTS("artists", "Исполнители", "Артисты из любимых треков и истории"),
+    HISTORY("history", "История прослушиваний", "Хронология недавно воспроизведённых треков");
+
+    companion object {
+        fun fromId(id: String?): LibrarySubCategory =
+            entries.firstOrNull { it.id == id } ?: PLAYLISTS
+    }
+}
+
+@Serializable
+enum class SettingsSubCategory(val id: String, val title: String, val subtitle: String) {
+    AUDIO_DSP("audio_dsp", "Звук и DSP Эквалайзер", "5-полосный эквалайзер, Bass Boost, 3D Virtualizer и Loudness"),
+    STREAMING_QUALITY("streaming_quality", "Качество потока и сеть", "Выбор битрейта, фейловер зеркал и сетевой буфер"),
+    PROVIDERS_HUB("providers_hub", "Источники музыки (8 нод)", "Управление провайдерами, пинг зеркал и статус API"),
+    STORAGE_CACHE("storage_cache", "Память и оффлайн-кэш", "Лимит кэша ExoPlayer, Room Offline и очистка места"),
+    APPEARANCE_THEME("appearance_theme", "Оформление и темы", "Тёмное/светлое стекло, пастельные градиенты и Material You"),
+    HOME_WIDGETS("home_widgets", "Виджеты рабочего стола", "Интерактивные виджеты 2×1, 4×2 и 4×3 для лаунчера"),
+    ABOUT_APP("about_app", "О приложении SlantMuz", "Сведения о версии, аудиоядре Media3 и архитектуре");
+
+    companion object {
+        fun fromId(id: String?): SettingsSubCategory =
+            entries.firstOrNull { it.id == id } ?: HOME_WIDGETS
     }
 }
 
@@ -241,7 +410,7 @@ data class RemoteStreamingConfig(
     val maxConcurrentSources: Int = 7,
     val autoFallbackOnError: Boolean = true,
     val maxCacheSizeMb: Int = 512,
-    val configSource: String = "Firebase Remote Config (Active)"
+    val configSource: String = "Активный профиль сети"
 )
 
 @Serializable

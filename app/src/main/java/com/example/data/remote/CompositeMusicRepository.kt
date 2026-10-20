@@ -182,6 +182,90 @@ class CompositeMusicRepository(
     }
 
     /**
+     * Queries active providers for a specific artist while keeping each provider's tracks strictly
+     * isolated (no cross-source mixing) and verified by artist name.
+     */
+    suspend fun fetchArtistCatalogByProvider(
+        artistName: String,
+        enabledProviders: Set<SourceProvider>,
+        existingKnownTracks: List<Track> = emptyList()
+    ): Map<SourceProvider, List<Track>> = withContext(Dispatchers.IO) {
+        val cleanName = artistName.trim()
+        if (cleanName.isBlank()) return@withContext emptyMap()
+
+        val rawTracks = mutableListOf<Track>()
+        rawTracks.addAll(existingKnownTracks)
+
+        coroutineScope {
+            val activeNetwork = networkSources.filter {
+                it.provider in enabledProviders && it.provider != SourceProvider.RADIO_BROWSER
+            }
+            val deferred = activeNetwork.map { source ->
+                async {
+                    runCatching {
+                        source.search(cleanName, limit = 15)
+                    }.getOrNull()
+                }
+            }
+
+            val localDeferred: kotlinx.coroutines.Deferred<List<Track>>? = if (SourceProvider.LOCAL in enabledProviders) {
+                async {
+                    runCatching {
+                        scanLocalTracks().filter { TrackDeduplicationEngine.isTrackByArtist(it, cleanName) }
+                    }.getOrDefault(emptyList())
+                }
+            } else {
+                null
+            }
+
+            deferred.awaitAll().filterNotNull().forEach { res ->
+                updateProviderHealth(
+                    provider = res.provider,
+                    isOnline = res.isOnline,
+                    latencyMs = res.latencyMs,
+                    activeMirror = res.activeMirror,
+                    tracksCount = res.tracks.size,
+                    error = res.error
+                )
+                rawTracks.addAll(res.tracks)
+            }
+
+            localDeferred?.await()?.let { rawTracks.addAll(it) }
+        }
+
+        val enriched = enrichWithRoomState(rawTracks)
+        TrackDeduplicationEngine.groupArtistTracksByProvider(enriched, cleanName)
+    }
+
+    /**
+     * Parallel multi-query harvester for the SlantWave recommendation engine.
+     */
+    suspend fun fetchWavePool(
+        queries: List<String>,
+        enabledProviders: Set<SourceProvider>
+    ): List<Track> = withContext(Dispatchers.IO) {
+        if (queries.isEmpty()) return@withContext emptyList()
+        val collected = mutableListOf<Track>()
+        val targetSources = networkSources.filter {
+            it.provider in enabledProviders && it.provider != SourceProvider.RADIO_BROWSER
+        }
+
+        coroutineScope {
+            val jobs = queries.take(4).flatMap { q ->
+                targetSources.map { src ->
+                    async {
+                        runCatching { src.search(q, limit = 8).tracks }.getOrDefault(emptyList())
+                    }
+                }
+            }
+            jobs.awaitAll().forEach { collected.addAll(it) }
+        }
+
+        enrichWithRoomState(collected)
+    }
+
+
+    /**
      * Fetches real trending & curated streams across active open providers in parallel.
      */
     suspend fun loadExploreSections(

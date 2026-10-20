@@ -415,7 +415,7 @@ class PlayerController private constructor(private val context: Context) {
     private fun ensureForegroundServiceStarted() {
         runCatching {
             val intent = Intent(context, MediaPlaybackService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+            context.startService(intent)
         }
     }
 

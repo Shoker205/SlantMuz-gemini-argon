@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -61,6 +62,7 @@ import coil.compose.AsyncImage
 import com.example.domain.SourceProvider
 import com.example.domain.Track
 import com.example.ui.theme.SlantCyan
+import com.example.ui.theme.SlantEmerald
 import com.example.ui.theme.SlantMagenta
 import com.example.ui.theme.SlantViolet
 import kotlin.math.abs
@@ -233,6 +235,7 @@ fun TrackItemCard(
     onFavoriteClick: () -> Unit,
     onDownloadClick: () -> Unit,
     onAddToPlaylistClick: () -> Unit,
+    onMoreClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val accentColor = MaterialTheme.colorScheme.primary
@@ -254,7 +257,7 @@ fun TrackItemCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .size(48.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(
                         Brush.linearGradient(
@@ -288,7 +291,7 @@ fun TrackItemCard(
                         Icon(
                             imageVector = Icons.Default.GraphicEq,
                             contentDescription = "Сейчас играет",
-                            tint = SlantCyan
+                            tint = Color(0xFFFACC15)
                         )
                     }
                 }
@@ -333,7 +336,7 @@ fun TrackItemCard(
                         Icon(
                             imageVector = Icons.Default.CloudDone,
                             contentDescription = "Сохранено оффлайн",
-                            tint = accentColor,
+                            tint = SlantEmerald,
                             modifier = Modifier.size(13.dp)
                         )
                     }
@@ -364,7 +367,7 @@ fun TrackItemCard(
                             },
                             contentDescription = "Кэшировать оффлайн",
                             tint = if (track.isCachedOffline) {
-                                accentColor
+                                SlantEmerald
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
@@ -372,20 +375,6 @@ fun TrackItemCard(
                         )
                     }
                 }
-            }
-
-            IconButton(
-                onClick = onAddToPlaylistClick,
-                modifier = Modifier
-                    .size(32.dp)
-                    .testTag("playlist_add_btn_${track.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    contentDescription = "Добавить в плейлист",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(19.dp)
-                )
             }
 
             IconButton(
@@ -409,10 +398,44 @@ fun TrackItemCard(
                     modifier = Modifier.size(18.dp)
                 )
             }
+
+            if (onMoreClick != null) {
+                IconButton(
+                    onClick = onMoreClick,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("more_track_btn_${track.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Меню трека",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = onAddToPlaylistClick,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .testTag("playlist_add_btn_${track.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                        contentDescription = "Добавить в плейлист",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
         }
     }
 }
 
+/**
+ * Floating MiniPlayerBar matching the sleek dark floating card at the bottom of Screenshots 4, 5, 6, 8, 9, 10:
+ * Rounded cover + Title + Artist + Heart icon + Play/Pause icon + progress indicator.
+ */
 @Composable
 fun MiniPlayerBar(
     track: Track,
@@ -428,25 +451,25 @@ fun MiniPlayerBar(
     val accentColor = MaterialTheme.colorScheme.primary
 
     LiquidGlassCard(
-        cornerRadius = 22.dp,
+        cornerRadius = 18.dp,
         tintColor = SlantCyan,
         onClick = onBarClick,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
             .testTag("mini_player_bar")
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(
                             Brush.linearGradient(listOf(SlantCyan.copy(alpha = 0.35f), SlantViolet.copy(alpha = 0.35f)))
                         ),
@@ -468,28 +491,22 @@ fun MiniPlayerBar(
                     }
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     MarqueeText(
                         text = track.title,
-                        style = MaterialTheme.typography.titleSmall,
+                        style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        ProviderBadgeChip(provider = track.primaryProvider)
-                        Text(
-                            text = track.artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        text = track.artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 Spacer(modifier = Modifier.width(4.dp))
@@ -497,42 +514,28 @@ fun MiniPlayerBar(
                 IconButton(
                     onClick = onToggleFavoriteClick,
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(36.dp)
                         .testTag("mini_player_fav_btn")
                 ) {
                     Icon(
                         imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                        contentDescription = "В избранное",
-                        tint = if (track.isFavorite) Color(0xFFE11D48) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onPreviousClick,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .testTag("mini_player_prev_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SkipPrevious,
-                        contentDescription = "Предыдущий трек",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(20.dp)
+                        contentDescription = "Мне нравится",
+                        tint = if (track.isFavorite) Color(0xFFE11D48) else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(21.dp)
                     )
                 }
 
                 IconButton(
                     onClick = onPlayPauseClick,
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(38.dp)
                         .testTag("mini_player_play_pause_btn")
                 ) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Пауза" else "Воспроизвести",
-                        tint = accentColor,
-                        modifier = Modifier.size(22.dp)
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
@@ -545,7 +548,7 @@ fun MiniPlayerBar(
                     Icon(
                         imageVector = Icons.Default.SkipNext,
                         contentDescription = "Следующий трек",
-                        tint = MaterialTheme.colorScheme.onSurface,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }

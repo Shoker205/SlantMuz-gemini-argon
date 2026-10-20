@@ -1,20 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <group
-        android:scaleX="0.52"
-        android:scaleY="0.52"
-        android:translateX="5.76"
-        android:translateY="5.76">
-        <!-- Bold filled equalizer / musical wave bars + note silhouette -->
-        <path
-            android:fillColor="#00F5D4"
-            android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
-        <path
-            android:fillColor="#FF2A85"
-            android:pathData="M3,10h2v7H3V10zM19,9h2v9h-2V9zM16,12h2v6h-2V12z" />
-    </group>
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Subtle glassmorphic circular halo inside the 66dp safe zone -->
+    <path
+        android:fillColor="#22FFFFFF"
+        android:pathData="M54,54m-31,0a31,31 0,1 1,62 0a31,31 0,1 1,-62 0" />
+
+    <!-- Studio Headphones Headband & Earcups Silhouette -->
+    <path android:pathData="M54,26C39.64,26 28,37.64 28,52v15c0,4.97 4.03,9 9,9h5c2.21,0 4,-1.79 4,-4V54c0,-2.21 -1.79,-4 -4,-4h-7.8C35.15,39.89 43.66,32 54,32s18.85,7.89 19.8,18H66c-2.21,0 -4,1.79 -4,4v18c0,2.21 1.79,4 4,4h5c4.97,0 9,-4.03 9,-9V52C80,37.64 68.36,26 54,26z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="28"
+                android:startY="26"
+                android:endX="80"
+                android:endY="78"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFFFF" />
+                <item android:offset="0.65" android:color="#E0F2FE" />
+                <item android:offset="1.0" android:color="#99F6E4" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Left and Right Earcup Cushions Accent -->
+    <path
+        android:fillColor="#5EEAD4"
+        android:pathData="M36,54h5v17h-5c-1.66,0 -3,-1.34 -3,-3V57C33,55.34 34.34,54 36,54zM67,54h5c1.66,0 3,1.34 3,3v11c0,1.66 -1.34,3 -3,3h-5V54z" />
+
+    <!-- Center Audio Wave Equalizer Bars inside Headphones -->
+    <path
+        android:fillColor="#5EEAD4"
+        android:pathData="M48,56c1.1,0 2,0.9 2,2v8c0,1.1 -0.9,2 -2,2s-2,-0.9 -2,-2v-8C46,56.9 46.9,56 48,56zM54,51c1.1,0 2,0.9 2,2v18c0,1.1 -0.9,2 -2,2s-2,-0.9 -2,-2V53C52,51.9 52.9,51 54,51zM60,56c1.1,0 2,0.9 2,2v8c0,1.1 -0.9,2 -2,2s-2,-0.9 -2,-2v-8C58,56.9 58.9,56 60,56z" />
 </vector>

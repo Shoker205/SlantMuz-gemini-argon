@@ -1,12 +1,16 @@
 package com.example.service
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -23,7 +27,9 @@ import com.google.common.util.concurrent.ListenableFuture
 
 /**
  * Enhanced Media3 MediaSessionService providing rich system media notification controls
- * with custom Favorite (Like) and Stream Mirror Switcher buttons in the notification shade & lock screen.
+ * with custom Favorite (Like) button in the notification shade & lock screen.
+ * Immediately satisfies Android's foreground service contract to prevent
+ * ForegroundServiceDidNotStartInTimeException.
  */
 @OptIn(UnstableApi::class)
 class MediaPlaybackService : MediaSessionService() {
@@ -33,6 +39,7 @@ class MediaPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
+        promoteToForegroundImmediately()
 
         val controller = PlayerController.getInstance(applicationContext)
         val player = controller.getOrCreateExoPlayer()
@@ -59,9 +66,52 @@ class MediaPlaybackService : MediaSessionService() {
         val notificationProvider = DefaultMediaNotificationProvider.Builder(applicationContext)
             .setChannelId(CHANNEL_ID)
             .setChannelName(R.string.notification_channel_name)
+            .setNotificationId(NOTIFICATION_ID)
             .build()
         notificationProvider.setSmallIcon(R.drawable.ic_launcher_foreground)
         setMediaNotificationProvider(notificationProvider)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureNotificationChannel()
+        promoteToForegroundImmediately()
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun promoteToForegroundImmediately() {
+        runCatching {
+            val notification = buildInitialForegroundNotification()
+            val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, fgsType)
+        }
+    }
+
+    private fun buildInitialForegroundNotification(): Notification {
+        val controller = PlayerController.getInstance(applicationContext)
+        val currentTrack = controller.playbackState.value.currentTrack
+        val sessionIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            sessionIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(currentTrack?.title ?: getString(R.string.app_name))
+            .setContentText(currentTrack?.artist ?: "Аудиоплеер активен")
+            .setContentIntent(pendingIntent)
+            .setOngoing(controller.playbackState.value.isPlaying)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
     }
 
     private inner class SlantMediaSessionCallback(
@@ -151,6 +201,7 @@ class MediaPlaybackService : MediaSessionService() {
 
     companion object {
         const val CHANNEL_ID = "slantmuz_playback_channel"
+        const val NOTIFICATION_ID = DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID
         const val ACTION_TOGGLE_FAVORITE = "com.example.service.ACTION_TOGGLE_FAVORITE"
     }
 }

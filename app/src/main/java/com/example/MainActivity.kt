@@ -22,16 +22,16 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Explore
-import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Widgets
-import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,18 +62,27 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.domain.ArtistProfile
+import com.example.domain.LibrarySubCategory
 import com.example.domain.LrcParser
+import com.example.domain.SettingsSubCategory
 import com.example.domain.Track
 import com.example.ui.components.EqualizerBottomSheet
 import com.example.ui.components.LyricsBottomSheet
 import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.PastelAuroraBackground
+import com.example.ui.components.TrackActionsBottomSheet
+import com.example.ui.components.WaveSettingsBottomSheet
 import com.example.ui.screens.AddToPlaylistDialog
+import com.example.ui.screens.ArtistScreen
 import com.example.ui.screens.DeveloperSettingsScreen
 import com.example.ui.screens.ExploreScreen
 import com.example.ui.screens.LibraryScreen
+import com.example.ui.screens.LibrarySubCategoryScreen
+import com.example.ui.screens.LikedTracksScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.SearchScreen
+import com.example.ui.screens.SettingsSubCategoryScreen
 import com.example.ui.theme.SlantMuzTheme
 import com.example.viewmodel.PlayerViewModel
 import com.example.widget.SlantMuzWidgetUpdater
@@ -83,6 +93,13 @@ object SlantDestinations {
     const val ROUTE_PLAYER = "player"
     const val ROUTE_LIBRARY = "library"
     const val ROUTE_SETTINGS = "settings"
+    const val ROUTE_ARTIST = "artist"
+    const val ROUTE_LIKED = "liked_tracks"
+    const val ROUTE_LIBRARY_SUB = "library_sub/{category}"
+    const val ROUTE_SETTINGS_SUB = "settings_sub/{category}"
+
+    fun librarySubRoute(category: LibrarySubCategory): String = "library_sub/${category.id}"
+    fun settingsSubRoute(category: SettingsSubCategory): String = "settings_sub/${category.id}"
 }
 
 data class BottomNavItem(
@@ -144,9 +161,21 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     val downloadingIds by viewModel.downloadingTrackIds.collectAsStateWithLifecycle()
     val exoCacheBytes by viewModel.exoCacheUsedBytes.collectAsStateWithLifecycle()
     val roomOfflineBytes by viewModel.totalOfflineBytes.collectAsStateWithLifecycle()
+    val waveSettings by viewModel.waveSettings.collectAsStateWithLifecycle()
+    val selectedArtistProfile by viewModel.selectedArtistProfile.collectAsStateWithLifecycle()
+    val likedArtistNames by viewModel.likedArtistNames.collectAsStateWithLifecycle()
+
+    // Reset triggers incremented when user taps/re-taps a dockbar section
+    var exploreResetTrigger by remember { mutableIntStateOf(0) }
+    var searchResetTrigger by remember { mutableIntStateOf(0) }
+    var playerResetTrigger by remember { mutableIntStateOf(0) }
+    var libraryResetTrigger by remember { mutableIntStateOf(0) }
+    var settingsResetTrigger by remember { mutableIntStateOf(0) }
 
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
+    var showWaveSettingsSheet by remember { mutableStateOf(false) }
+    var trackForActionsSheet by remember { mutableStateOf<Track?>(null) }
     var trackToAddToPlaylist by remember { mutableStateOf<Track?>(null) }
 
     val activeLyricLine = remember(currentLyrics, playbackState.positionMs) {
@@ -179,9 +208,9 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
         listOf(
             BottomNavItem(
                 route = SlantDestinations.ROUTE_EXPLORE,
-                label = "Обзор",
-                selectedIcon = Icons.Filled.Explore,
-                unselectedIcon = Icons.Outlined.Explore,
+                label = "Волна",
+                selectedIcon = Icons.Filled.AutoAwesome,
+                unselectedIcon = Icons.Outlined.AutoAwesome,
                 testTag = "nav_tab_explore"
             ),
             BottomNavItem(
@@ -200,19 +229,24 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
             ),
             BottomNavItem(
                 route = SlantDestinations.ROUTE_LIBRARY,
-                label = "Медиатека",
-                selectedIcon = Icons.Filled.LibraryMusic,
+                label = "Коллекция",
+                selectedIcon = Icons.Filled.Favorite,
                 unselectedIcon = Icons.Outlined.LibraryMusic,
                 testTag = "nav_tab_library"
             ),
             BottomNavItem(
                 route = SlantDestinations.ROUTE_SETTINGS,
-                label = "Виджеты",
-                selectedIcon = Icons.Filled.Widgets,
-                unselectedIcon = Icons.Outlined.Widgets,
+                label = "Настройки",
+                selectedIcon = Icons.Filled.Settings,
+                unselectedIcon = Icons.Outlined.Settings,
                 testTag = "nav_tab_settings"
             )
         )
+    }
+
+    val allCatalogPool = remember(exploreFeed, favoriteTracks, historyTracks) {
+        (exploreFeed.trendingFullStreams + exploreFeed.globalChartTracks + favoriteTracks + historyTracks)
+            .distinctBy { it.id }
     }
 
     val activeTrack = playbackState.currentTrack
@@ -247,24 +281,45 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                     }
 
                     NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                         tonalElevation = 0.dp,
                         modifier = Modifier
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .clip(RoundedCornerShape(24.dp))
                     ) {
                         navItems.forEach { item ->
-                            val selected = currentRoute == item.route
+                            val isLibraryChild = currentRoute == SlantDestinations.ROUTE_LIKED ||
+                                currentRoute == SlantDestinations.ROUTE_LIBRARY_SUB ||
+                                currentRoute == SlantDestinations.ROUTE_ARTIST
+                            val isSettingsChild = currentRoute == SlantDestinations.ROUTE_SETTINGS_SUB
+
+                            val selected = currentRoute == item.route ||
+                                (item.route == SlantDestinations.ROUTE_LIBRARY && isLibraryChild) ||
+                                (item.route == SlantDestinations.ROUTE_SETTINGS && isSettingsChild)
+
                             NavigationBarItem(
                                 selected = selected,
                                 onClick = {
+                                    // Always trigger reset to initial state/page of this section
+                                    when (item.route) {
+                                        SlantDestinations.ROUTE_EXPLORE -> exploreResetTrigger++
+                                        SlantDestinations.ROUTE_SEARCH -> searchResetTrigger++
+                                        SlantDestinations.ROUTE_PLAYER -> playerResetTrigger++
+                                        SlantDestinations.ROUTE_LIBRARY -> libraryResetTrigger++
+                                        SlantDestinations.ROUTE_SETTINGS -> settingsResetTrigger++
+                                    }
+
+                                    // If currently on a sub-window or a different tab, pop back to the root screen of this tab
                                     if (currentRoute != item.route) {
-                                        navController.navigate(item.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
+                                        val popped = navController.popBackStack(item.route, inclusive = false)
+                                        if (!popped) {
+                                            navController.navigate(item.route) {
+                                                popUpTo(navController.graph.findStartDestination().id) {
+                                                    saveState = false
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = false
                                             }
-                                            launchSingleTop = true
-                                            restoreState = true
                                         }
                                     }
                                 },
@@ -334,6 +389,10 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             progressFraction = progressFraction,
                             activeLyricLine = activeLyricLine,
                             downloadingIds = downloadingIds,
+                            waveSettings = waveSettings,
+                            isWaveGenerating = isWaveGenerating,
+                            waveQueueTracks = waveQueueTracks,
+                            resetTrigger = exploreResetTrigger,
                             onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
                             onPlayPause = { viewModel.togglePlayPause() },
                             onPrevious = { viewModel.skipPrevious() },
@@ -341,15 +400,27 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
                             onAddToPlaylist = { trackToAddToPlaylist = it },
-                            onQuickGenreClick = { genre ->
-                                viewModel.submitSearchNow(genre)
-                                navController.navigate(SlantDestinations.ROUTE_SEARCH) {
+                            onOpenTrackMenu = { trackForActionsSheet = it },
+                            onOpenWaveSettings = { showWaveSettingsSheet = true },
+                            onStartMyWave = {
+                                viewModel.launchWave(waveSettings)
+                                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onResetWaveSettings = { viewModel.resetWaveSettings() },
+                            onQuickGenreClick = { chipLabel ->
+                                viewModel.toggleQuickWaveChip(chipLabel)
+                            },
+                            onGenerateSmartPlaylist = { preset ->
+                                viewModel.generateSmartPlaylist(preset, playImmediately = true)
+                                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
                                     launchSingleTop = true
                                 }
                             },
                             onOpenEqualizer = { showEqualizerSheet = true },
                             onOpenLyrics = { showLyricsSheet = true },
-                            onOpenWidgetsHub = {
+                            onOpenSettingsHub = {
                                 navController.navigate(SlantDestinations.ROUTE_SETTINGS) {
                                     launchSingleTop = true
                                 }
@@ -362,30 +433,64 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                         SearchScreen(
                             query = searchQuery,
                             selectedFilter = selectedFilter,
+                            selectedSortMode = searchSortMode,
                             searchResults = searchResults,
                             searchHistory = searchHistory,
                             isSearching = isSearching,
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             downloadingIds = downloadingIds,
+                            resetTrigger = searchResetTrigger,
                             onQueryChange = { viewModel.onSearchQueryChanged(it) },
                             onSubmitSearch = { viewModel.submitSearchNow(it) },
                             onFilterChange = { viewModel.selectSourceFilter(it) },
+                            onSortModeChange = { viewModel.selectSearchSortMode(it) },
+                            onOpenArtistProfile = { artistName, preferredProvider ->
+                                viewModel.openArtistProfile(artistName, preferredProvider)
+                                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                                    launchSingleTop = true
+                                }
+                            },
                             onDeleteHistoryQuery = { viewModel.deleteSearchHistoryItem(it) },
                             onClearHistory = { viewModel.clearSearchHistory() },
                             onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
-                            onAddToPlaylist = { trackToAddToPlaylist = it }
+                            onAddToPlaylist = { trackToAddToPlaylist = it },
+                            onOpenTrackMenu = { trackForActionsSheet = it }
                         )
                     }
 
                     composable(SlantDestinations.ROUTE_PLAYER) {
+                        val currentTrack = playbackState.currentTrack
+                        val similarForPlayer = remember(currentTrack, allCatalogPool) {
+                            if (currentTrack == null) {
+                                allCatalogPool.take(6)
+                            } else {
+                                val targetGenre = currentTrack.genre.lowercase()
+                                val isTargetRu = com.example.domain.SlantWaveEngine.isRussianTrack(currentTrack)
+                                allCatalogPool
+                                    .filter { it.id != currentTrack.id && !it.isLiveStream }
+                                    .sortedByDescending { candidate ->
+                                        var s = 0
+                                        if (com.example.domain.TrackDeduplicationEngine.isTrackByArtist(candidate, currentTrack.artist)) s += 50
+                                        if (candidate.genre.lowercase() == targetGenre) s += 35
+                                        if (com.example.domain.SlantWaveEngine.isRussianTrack(candidate) == isTargetRu) s += 20
+                                        if (!candidate.isPreviewOnly) s += 15
+                                        s
+                                    }
+                                    .take(6)
+                            }
+                        }
                         NowPlayingScreen(
                             playbackState = playbackState,
                             currentLyrics = currentLyrics,
                             artistBio = artistBio,
                             isDownloading = playbackState.currentTrack?.id in downloadingIds,
+                            similarTracks = similarForPlayer,
+                            playlists = playlists,
+                            waveContextLabel = waveSettings.contextLabel,
+                            resetTrigger = playerResetTrigger,
                             onPlayPause = { viewModel.togglePlayPause() },
                             onSkipNext = { viewModel.skipNext() },
                             onSkipPrevious = { viewModel.skipPrevious() },
@@ -397,7 +502,26 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onOpenLyricsSheet = { showLyricsSheet = true },
                             onOpenEqualizerSheet = { showEqualizerSheet = true },
                             onSelectStreamCandidate = { viewModel.switchStreamCandidate(it) },
-                            onStartSleepTimer = { viewModel.startSleepTimer(it) }
+                            onStartSleepTimer = { viewModel.startSleepTimer(it) },
+                            onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
+                            onStartTrackWave = { track -> viewModel.launchTrackWave(track) },
+                            onDislikeTrack = { track -> viewModel.dislikeTrack(track) },
+                            onOpenTrackMenu = { track -> trackForActionsSheet = track },
+                            onOpenArtist = { artistName ->
+                                viewModel.openArtistProfile(artistName, playbackState.currentTrack?.primaryProvider)
+                                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onQuickAddToPlaylist = { playlistId, track ->
+                                viewModel.addTrackToPlaylist(playlistId, track)
+                            },
+                            onOpenAddToPlaylistDialog = { track ->
+                                trackToAddToPlaylist = track
+                            },
+                            onCollapsePlayer = {
+                                navController.popBackStack()
+                            }
                         )
                     }
 
@@ -408,16 +532,124 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             localTracks = localTracks,
                             historyTracks = historyTracks,
                             playlists = playlists,
+                            likedArtistNames = likedArtistNames,
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             downloadingIds = downloadingIds,
+                            resetTrigger = libraryResetTrigger,
                             onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
                             onAddToPlaylist = { trackToAddToPlaylist = it },
                             onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
                             onDeletePlaylist = { viewModel.deletePlaylist(it) },
-                            onScanLocalMedia = { viewModel.scanLocalDeviceAudio() }
+                            onScanLocalMedia = { viewModel.scanLocalDeviceAudio() },
+                            onOpenLikedScreen = {
+                                navController.navigate(SlantDestinations.ROUTE_LIKED) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenSubCategory = { subCat ->
+                                navController.navigate(SlantDestinations.librarySubRoute(subCat)) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenArtist = { artistName ->
+                                viewModel.openArtistProfile(artistName)
+                                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenTrackMenu = { trackForActionsSheet = it },
+                            onStartCollectionWave = {
+                                viewModel.launchCollectionWave()
+                                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenWaveSettings = { showWaveSettingsSheet = true },
+                            onNavigateToSearch = { q ->
+                                if (q.isNotBlank()) {
+                                    viewModel.submitSearchNow(q)
+                                }
+                                navController.navigate(SlantDestinations.ROUTE_SEARCH) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+
+                    composable(SlantDestinations.ROUTE_LIBRARY_SUB) { backStackEntry ->
+                        val catId = backStackEntry.arguments?.getString("category")
+                        val subCat = LibrarySubCategory.fromId(catId)
+                        LibrarySubCategoryScreen(
+                            subCategory = subCat,
+                            favoriteTracks = favoriteTracks,
+                            offlineTracks = offlineTracks,
+                            localTracks = localTracks,
+                            historyTracks = historyTracks,
+                            playlists = playlists,
+                            likedArtistNames = likedArtistNames,
+                            currentTrack = playbackState.currentTrack,
+                            isPlaying = playbackState.isPlaying,
+                            downloadingIds = downloadingIds,
+                            onBack = { navController.popBackStack() },
+                            onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) },
+                            onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
+                            onAddToPlaylist = { trackToAddToPlaylist = it },
+                            onOpenTrackMenu = { trackForActionsSheet = it },
+                            onCreatePlaylist = { name, desc -> viewModel.createPlaylist(name, desc) },
+                            onDeletePlaylist = { viewModel.deletePlaylist(it) },
+                            onScanLocalMedia = { viewModel.scanLocalDeviceAudio() },
+                            onOpenArtist = { artistName ->
+                                viewModel.openArtistProfile(artistName)
+                                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+
+                    composable(SlantDestinations.ROUTE_LIKED) {
+                        LikedTracksScreen(
+                            likedTracks = favoriteTracks,
+                            currentTrack = playbackState.currentTrack,
+                            isPlaying = playbackState.isPlaying,
+                            onBack = { navController.popBackStack() },
+                            onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
+                            onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
+                            onOpenTrackMenu = { trackForActionsSheet = it },
+                            onStartLikedWave = {
+                                viewModel.launchLikedPlaylistWave()
+                                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+
+                    composable(SlantDestinations.ROUTE_ARTIST) {
+                        val profile = selectedArtistProfile ?: ArtistProfile(
+                            name = playbackState.currentTrack?.artist ?: "",
+                            avatarUrl = playbackState.currentTrack?.artworkUrl.orEmpty()
+                        )
+                        ArtistScreen(
+                            artistProfile = profile,
+                            currentTrack = playbackState.currentTrack,
+                            isPlaying = playbackState.isPlaying,
+                            onBack = { navController.popBackStack() },
+                            onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
+                            onPlayTrailer = { track -> viewModel.playTrailerHighlight(track) },
+                            onStartArtistWave = { artistName ->
+                                viewModel.launchArtistWave(artistName)
+                                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onToggleLikeArtist = { viewModel.toggleLikeArtist(it) },
+                            onSelectProvider = { viewModel.selectArtistProvider(it) },
+                            onOpenTrackMenu = { trackForActionsSheet = it }
                         )
                     }
 
@@ -428,9 +660,30 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             remoteConfig = remoteConfig,
                             exoCacheBytes = exoCacheBytes,
                             roomOfflineBytes = roomOfflineBytes,
+                            resetTrigger = settingsResetTrigger,
+                            onOpenSubCategory = { subCat ->
+                                navController.navigate(SlantDestinations.settingsSubRoute(subCat)) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            onOpenEqualizer = { showEqualizerSheet = true }
+                        )
+                    }
+
+                    composable(SlantDestinations.ROUTE_SETTINGS_SUB) { backStackEntry ->
+                        val catId = backStackEntry.arguments?.getString("category")
+                        val subCat = SettingsSubCategory.fromId(catId)
+                        SettingsSubCategoryScreen(
+                            subCategory = subCat,
+                            userSettings = userSettings,
+                            providerStatuses = providerStatuses,
+                            remoteConfig = remoteConfig,
+                            exoCacheBytes = exoCacheBytes,
+                            roomOfflineBytes = roomOfflineBytes,
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             activeLyricLine = activeLyricLine,
+                            onBack = { navController.popBackStack() },
                             onPlayPause = { viewModel.togglePlayPause() },
                             onPrevious = { viewModel.skipPrevious() },
                             onNext = { viewModel.skipNext() },
@@ -450,6 +703,46 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                 }
             }
         }
+    }
+
+    if (showWaveSettingsSheet) {
+        WaveSettingsBottomSheet(
+            waveSettings = waveSettings,
+            onUpdateSettings = { viewModel.updateWaveSettings(it) },
+            onLaunchWave = { settings ->
+                viewModel.launchWave(settings)
+                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                    launchSingleTop = true
+                }
+            },
+            onReset = { viewModel.resetWaveSettings() },
+            onDismiss = { showWaveSettingsSheet = false }
+        )
+    }
+
+    trackForActionsSheet?.let { targetTrack ->
+        TrackActionsBottomSheet(
+            track = targetTrack,
+            onDismiss = { trackForActionsSheet = null },
+            onStartTrackWave = { track ->
+                viewModel.launchTrackWave(track)
+                navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                    launchSingleTop = true
+                }
+            },
+            onToggleFavorite = { viewModel.toggleFavorite(it) },
+            onDownloadOffline = { viewModel.downloadTrackForOffline(it) },
+            onPlayTrailerHighlight = { viewModel.playTrailerHighlight(it) },
+            onAddToPlaylist = { trackToAddToPlaylist = it },
+            onRemoveFromQueue = { viewModel.removeTrackFromQueue(it) },
+            onDislikeTrack = { viewModel.dislikeTrack(it) },
+            onOpenArtist = { artistName ->
+                viewModel.openArtistProfile(artistName, targetTrack.primaryProvider)
+                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                    launchSingleTop = true
+                }
+            }
+        )
     }
 
     val currentTrackForLyrics = playbackState.currentTrack
@@ -486,7 +779,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                 viewModel.addTrackToPlaylist(playlistId, targetTrack)
             },
             onCreateAndAdd = { newName ->
-                viewModel.createPlaylist(newName, "SlantMuz Pastel Mix")
+                viewModel.createPlaylist(newName, "SlantMuz Mix")
             },
             onDismiss = { trackToAddToPlaylist = null }
         )
