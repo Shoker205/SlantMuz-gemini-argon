@@ -266,26 +266,82 @@ class CompositeMusicRepository(
 
 
     /**
-     * Fetches real trending & curated streams across active open providers in parallel.
+     * Fetches and ranks personalized feeds & curated streams across active open providers in parallel,
+     * driven by the user's pre-configured Taste DNA, liked tracks, playlists, albums, and history.
      */
     suspend fun loadExploreSections(
-        enabledProviders: Set<SourceProvider>
+        enabledProviders: Set<SourceProvider>,
+        tasteProfile: com.example.domain.UserTasteProfile = com.example.domain.UserTasteProfile(),
+        favoriteTracks: List<Track> = emptyList(),
+        playlistTracks: List<Track> = emptyList(),
+        historyTracks: List<Track> = emptyList(),
+        likedArtists: Set<String> = emptySet(),
+        dislikedTrackIds: Set<String> = emptySet()
     ): ExploreFeedData = withContext(Dispatchers.IO) {
+        val dnaSummary = com.example.domain.SlantWaveEngine.computeTasteDnaSummary(
+            tasteProfile = tasteProfile,
+            favoriteTracks = favoriteTracks,
+            playlistTracks = playlistTracks,
+            historyTracks = historyTracks,
+            likedArtists = likedArtists
+        )
+        val queryPlan = com.example.domain.SlantWaveEngine.buildPersonalizedExploreQueries(
+            tasteProfile = tasteProfile,
+            dnaSummary = dnaSummary
+        )
+
+        val primaryGenreQuery = queryPlan.genreRadarQueries.firstOrNull() ?: "Synthwave Electronic Indie"
+        val primaryArtistQuery = queryPlan.favoriteArtistsQueries.firstOrNull() ?: primaryGenreQuery
+
         coroutineScope {
+            val forYouPoolDeferred = async {
+                runCatching {
+                    fetchWavePool(queryPlan.forYouQueries.take(3), enabledProviders)
+                }.getOrDefault(emptyList())
+            }
+            val artistPoolDeferred = async {
+                runCatching {
+                    fetchWavePool(queryPlan.favoriteArtistsQueries.take(3), enabledProviders)
+                }.getOrDefault(emptyList())
+            }
+            val genrePoolDeferred = async {
+                runCatching {
+                    fetchWavePool(queryPlan.genreRadarQueries.take(3), enabledProviders)
+                }.getOrDefault(emptyList())
+            }
+
             val jamendoDeferred = async {
-                runCatching { jamendoSource.getTrending(10) }.getOrNull()
+                runCatching {
+                    if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty() || playlistTracks.isNotEmpty()) {
+                        jamendoSource.search(primaryGenreQuery, 10)
+                    } else {
+                        jamendoSource.getTrending(10)
+                    }
+                }.getOrNull()
             }
             val audiusDeferred = async {
-                runCatching { audiusSource.getTrending(10) }.getOrNull()
+                runCatching {
+                    if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty() || playlistTracks.isNotEmpty()) {
+                        audiusSource.search(primaryGenreQuery, 10)
+                    } else {
+                        audiusSource.getTrending(10)
+                    }
+                }.getOrNull()
             }
             val deezerDeferred = async {
-                runCatching { deezerSource.getTrending(10) }.getOrNull()
+                runCatching {
+                    if (tasteProfile.hasAnyExplicitPreferences || favoriteTracks.isNotEmpty()) {
+                        deezerSource.search(primaryArtistQuery, 10)
+                    } else {
+                        deezerSource.getTrending(10)
+                    }
+                }.getOrNull()
             }
             val itunesDeferred = async {
-                runCatching { itunesSource.search("Synthwave Cyberpunk Electronic", 10) }.getOrNull()
+                runCatching { itunesSource.search(primaryGenreQuery, 10) }.getOrNull()
             }
             val radioDeferred = async {
-                runCatching { radioSource.search("Chill", 8) }.getOrNull()
+                runCatching { radioSource.search(queryPlan.radioQuery, 8) }.getOrNull()
             }
 
             val results = listOfNotNull(
@@ -307,25 +363,88 @@ class CompositeMusicRepository(
                 )
             }
 
-            val fullLengthTracks = enrichWithRoomState(
+            val forYouRaw = forYouPoolDeferred.await()
+            val artistRaw = artistPoolDeferred.await()
+            val genreRaw = genrePoolDeferred.await()
+
+            val fullLengthRaw = enrichWithRoomState(
                 TrackDeduplicationEngine.deduplicateAndRank(
                     (jamendoDeferred.await()?.tracks.orEmpty()) +
-                        (audiusDeferred.await()?.tracks.orEmpty())
+                        (audiusDeferred.await()?.tracks.orEmpty()) +
+                        forYouRaw.filter { !it.isPreviewOnly && it.durationSec >= 45 }
                 )
             )
 
-            val globalCharts = enrichWithRoomState(
+            val globalChartsRaw = enrichWithRoomState(
                 TrackDeduplicationEngine.deduplicateAndRank(
                     (deezerDeferred.await()?.tracks.orEmpty()) +
                         (itunesDeferred.await()?.tracks.orEmpty())
                 )
             )
 
+            val personalForYouRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = forYouRaw + artistRaw + genreRaw + favoriteTracks + playlistTracks + fullLengthRaw,
+                settings = com.example.domain.WaveSettings(),
+                tasteProfile = tasteProfile,
+                favoriteTracks = favoriteTracks,
+                playlistTracks = playlistTracks,
+                historyTracks = historyTracks,
+                likedArtists = likedArtists,
+                dislikedTrackIds = dislikedTrackIds
+            ).take(14)
+
+            val favoriteArtistsRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = artistRaw + favoriteTracks + playlistTracks,
+                settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.FAVORITE),
+                tasteProfile = tasteProfile,
+                favoriteTracks = favoriteTracks,
+                playlistTracks = playlistTracks,
+                historyTracks = historyTracks,
+                likedArtists = likedArtists,
+                dislikedTrackIds = dislikedTrackIds
+            ).take(12)
+
+            val genreRadarRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = genreRaw + fullLengthRaw + globalChartsRaw,
+                settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.UNFAMILIAR),
+                tasteProfile = tasteProfile,
+                favoriteTracks = favoriteTracks,
+                playlistTracks = playlistTracks,
+                historyTracks = historyTracks,
+                likedArtists = likedArtists,
+                dislikedTrackIds = dislikedTrackIds
+            ).take(12)
+
+            val fullLengthRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = fullLengthRaw,
+                settings = com.example.domain.WaveSettings(),
+                tasteProfile = tasteProfile.copy(preferFullLengthTracks = true),
+                favoriteTracks = favoriteTracks,
+                playlistTracks = playlistTracks,
+                historyTracks = historyTracks,
+                likedArtists = likedArtists,
+                dislikedTrackIds = dislikedTrackIds
+            )
+
+            val globalChartsRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                rawCandidates = globalChartsRaw,
+                settings = com.example.domain.WaveSettings(character = com.example.domain.WaveCharacter.POPULAR),
+                tasteProfile = tasteProfile,
+                favoriteTracks = favoriteTracks,
+                playlistTracks = playlistTracks,
+                historyTracks = historyTracks,
+                likedArtists = likedArtists,
+                dislikedTrackIds = dislikedTrackIds
+            )
+
             val liveRadio = radioDeferred.await()?.tracks.orEmpty()
 
             ExploreFeedData(
-                trendingFullStreams = fullLengthTracks,
-                globalChartTracks = globalCharts,
+                personalForYouTracks = personalForYouRanked,
+                favoriteArtistsTracks = favoriteArtistsRanked,
+                genreRadarTracks = genreRadarRanked,
+                trendingFullStreams = fullLengthRanked,
+                globalChartTracks = globalChartsRanked,
                 liveRadioStations = liveRadio
             )
         }
@@ -604,6 +723,9 @@ class CompositeMusicRepository(
 }
 
 data class ExploreFeedData(
+    val personalForYouTracks: List<Track> = emptyList(),
+    val favoriteArtistsTracks: List<Track> = emptyList(),
+    val genreRadarTracks: List<Track> = emptyList(),
     val trendingFullStreams: List<Track> = emptyList(),
     val globalChartTracks: List<Track> = emptyList(),
     val liveRadioStations: List<Track> = emptyList()

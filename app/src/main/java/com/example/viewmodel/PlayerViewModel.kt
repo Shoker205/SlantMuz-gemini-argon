@@ -30,6 +30,8 @@ import com.example.domain.StreamCandidate
 import com.example.domain.SyncedLyrics
 import com.example.domain.Track
 import com.example.domain.TrackDeduplicationEngine
+import com.example.domain.UserTasteDnaSummary
+import com.example.domain.UserTasteProfile
 import com.example.domain.WaveActivity
 import com.example.domain.WaveCharacter
 import com.example.domain.WaveLanguage
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -144,6 +147,31 @@ class PlayerViewModel(
     private val _selectedArtistProfile = MutableStateFlow<ArtistProfile?>(null)
     val selectedArtistProfile: StateFlow<ArtistProfile?> = _selectedArtistProfile.asStateFlow()
 
+    /**
+     * Live reactive Musical DNA summary computed from pre-configured preferences,
+     * liked tracks, user playlists, liked artists, liked albums, and listening history.
+     */
+    val tasteDnaSummary: StateFlow<UserTasteDnaSummary> = combine(
+        userSettings,
+        favoriteTracks,
+        playlists,
+        historyTracks,
+        _likedArtistNames
+    ) { settings, favs, plList, hist, likedArtists ->
+        val plTracks = plList.flatMap { pw -> pw.tracks.map { it.toDomain() } }
+        SlantWaveEngine.computeTasteDnaSummary(
+            tasteProfile = settings.tasteProfile,
+            favoriteTracks = favs,
+            playlistTracks = plTracks,
+            historyTracks = hist,
+            likedArtists = likedArtists + settings.tasteProfile.selectedArtists
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UserTasteDnaSummary()
+    )
+
     private var searchDebounceJob: Job? = null
     private var waveGenerationJob: Job? = null
 
@@ -162,6 +190,8 @@ class PlayerViewModel(
         viewModelScope.launch {
             preferencesRepository.settingsFlow.collect { settings ->
                 playerController.audioEffectsManager.applyDspState(settings.dspState)
+                _likedArtistNames.value = settings.tasteProfile.selectedArtists
+                _dislikedTrackIds.value = settings.dislikedTrackIds
             }
         }
 
@@ -170,20 +200,65 @@ class PlayerViewModel(
         refreshExoCacheSize()
     }
 
+    private fun currentPlaylistDomainTracks(): List<Track> {
+        return playlists.value.flatMap { pw -> pw.tracks.map { it.toDomain() } }
+    }
+
     fun refreshExploreFeed() {
         viewModelScope.launch {
             _isExploreLoading.value = true
-            val feed = musicRepository.loadExploreSections(userSettings.value.enabledProviders)
+            val settings = userSettings.value
+            val plTracks = currentPlaylistDomainTracks()
+            val feed = musicRepository.loadExploreSections(
+                enabledProviders = settings.enabledProviders,
+                tasteProfile = settings.tasteProfile,
+                favoriteTracks = favoriteTracks.value,
+                playlistTracks = plTracks,
+                historyTracks = historyTracks.value,
+                likedArtists = _likedArtistNames.value + settings.tasteProfile.selectedArtists,
+                dislikedTrackIds = _dislikedTrackIds.value
+            )
             _exploreFeed.value = feed
             _isExploreLoading.value = false
 
             if (playbackState.value.currentTrack == null) {
-                val initialQueue = feed.trendingFullStreams.ifEmpty { feed.globalChartTracks }
+                val initialQueue = feed.personalForYouTracks
+                    .ifEmpty { feed.trendingFullStreams }
+                    .ifEmpty { feed.globalChartTracks }
                 val first = initialQueue.firstOrNull()
                 if (first != null) {
                     loadLyricsAndBioForTrack(first)
                 }
             }
+        }
+    }
+
+    // --- PRE-CONFIGURATION & USER TASTE DNA MANAGEMENT ---
+
+    fun saveUserTasteProfile(profile: UserTasteProfile, launchWaveImmediately: Boolean = false) {
+        viewModelScope.launch {
+            preferencesRepository.saveTasteProfile(profile.copy(isOnboardingCompleted = true))
+            _likedArtistNames.value = profile.selectedArtists
+            refreshExploreFeed()
+            if (launchWaveImmediately) {
+                launchWave(_waveSettings.value)
+            }
+        }
+    }
+
+    fun toggleLikeAlbum(artistName: String, albumTitle: String) {
+        val albumKey = "${artistName.trim()}|${albumTitle.trim()}"
+        viewModelScope.launch {
+            val updatedAlbums = preferencesRepository.toggleLikedAlbum(albumKey)
+            _selectedArtistProfile.value = _selectedArtistProfile.value?.let { current ->
+                current.copy(
+                    albums = current.albums.map { alb ->
+                        val key = "${alb.artist.trim()}|${alb.title.trim()}"
+                        alb.copy(isLiked = updatedAlbums.any { it.equals(key, ignoreCase = true) })
+                    }
+                )
+            }
+            refreshExploreFeed()
         }
     }
 
@@ -229,17 +304,18 @@ class PlayerViewModel(
     }
 
     fun launchWave(settings: WaveSettings = _waveSettings.value) {
+        val tasteProfile = userSettings.value.tasteProfile
         val label = if (settings.isCustomized) {
             "Моя волна • ${settings.summarySubtitle()}"
         } else {
-            "Моя волна"
+            "Моя волна • ДНК ${tasteDnaSummary.value.personalizationPercent}%"
         }
         val activeSettings = settings.copy(contextLabel = label)
         _waveSettings.value = activeSettings
 
-        // Auto-sync DSP equalizer preset to match the wave's acoustic character
-        if (activeSettings.autoSyncEqualizer && activeSettings.isCustomized) {
-            val recommendedPreset = SlantWaveEngine.recommendedEqualizerPreset(activeSettings)
+        // Auto-sync DSP equalizer preset to match the wave's acoustic character or user's top genre
+        if (activeSettings.autoSyncEqualizer) {
+            val recommendedPreset = SlantWaveEngine.recommendedEqualizerPreset(activeSettings, tasteProfile)
             playerController.audioEffectsManager.selectPreset(recommendedPreset)
             saveCurrentDsp()
         }
@@ -247,12 +323,16 @@ class PlayerViewModel(
         waveGenerationJob?.cancel()
         waveGenerationJob = viewModelScope.launch {
             _isWaveGenerating.value = true
+            val plTracks = currentPlaylistDomainTracks()
+            val allLikedArtists = _likedArtistNames.value + tasteProfile.selectedArtists
 
             val targetedQueries = SlantWaveEngine.buildTargetedWaveQueries(
                 settings = activeSettings,
+                tasteProfile = tasteProfile,
                 favoriteTracks = favoriteTracks.value,
+                playlistTracks = plTracks,
                 historyTracks = historyTracks.value,
-                likedArtists = _likedArtistNames.value
+                likedArtists = allLikedArtists
             )
 
             val remoteHarvested = runCatching {
@@ -266,12 +346,15 @@ class PlayerViewModel(
                 when (activeSettings.character) {
                     WaveCharacter.FAVORITE -> {
                         addAll(favoriteTracks.value)
+                        addAll(plTracks)
+                        addAll(_exploreFeed.value.favoriteArtistsTracks)
                         addAll(historyTracks.value)
                         addAll(remoteHarvested)
                         addAll(_localTracks.value)
                     }
                     WaveCharacter.UNFAMILIAR -> {
                         addAll(remoteHarvested)
+                        addAll(_exploreFeed.value.genreRadarTracks)
                         addAll(_exploreFeed.value.trendingFullStreams)
                         addAll(_exploreFeed.value.globalChartTracks)
                     }
@@ -282,7 +365,10 @@ class PlayerViewModel(
                     }
                     null -> {
                         addAll(remoteHarvested)
+                        addAll(_exploreFeed.value.personalForYouTracks)
+                        addAll(_exploreFeed.value.favoriteArtistsTracks)
                         addAll(favoriteTracks.value)
+                        addAll(plTracks)
                         addAll(_exploreFeed.value.trendingFullStreams)
                         addAll(_exploreFeed.value.globalChartTracks)
                         addAll(_localTracks.value)
@@ -293,9 +379,11 @@ class PlayerViewModel(
             val rankedWaveQueue = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = basePool,
                 settings = activeSettings,
+                tasteProfile = tasteProfile,
                 favoriteTracks = favoriteTracks.value,
+                playlistTracks = plTracks,
                 historyTracks = historyTracks.value,
-                likedArtists = _likedArtistNames.value,
+                likedArtists = allLikedArtists,
                 dislikedTrackIds = _dislikedTrackIds.value
             )
 
@@ -331,12 +419,17 @@ class PlayerViewModel(
                 )
             }.getOrDefault(emptyList())
 
+            val plTracks = currentPlaylistDomainTracks()
+            val tasteProfile = userSettings.value.tasteProfile
+
             val filteredSimilar = SlantWaveEngine.rankAndFilterWaveCandidates(
-                rawCandidates = similar + _exploreFeed.value.trendingFullStreams,
+                rawCandidates = similar + _exploreFeed.value.personalForYouTracks + _exploreFeed.value.trendingFullStreams,
                 settings = currentSettings,
+                tasteProfile = tasteProfile,
                 favoriteTracks = favoriteTracks.value,
+                playlistTracks = plTracks,
                 historyTracks = historyTracks.value,
-                likedArtists = _likedArtistNames.value,
+                likedArtists = _likedArtistNames.value + tasteProfile.selectedArtists,
                 dislikedTrackIds = _dislikedTrackIds.value
             )
 
@@ -408,16 +501,17 @@ class PlayerViewModel(
         }
         if (cleanName.isBlank()) return
 
-        // If the currently playing track or recently clicked track is by this artist, infer its provider
         val inferredProvider = preferredProvider ?: playbackState.value.currentTrack
             ?.takeIf { TrackDeduplicationEngine.isTrackByArtist(it, cleanName) }
             ?.primaryProvider
 
         val allKnown = (
             favoriteTracks.value +
+                currentPlaylistDomainTracks() +
                 historyTracks.value +
                 _localTracks.value +
                 _rawSearchResults.value +
+                _exploreFeed.value.personalForYouTracks +
                 _exploreFeed.value.trendingFullStreams +
                 _exploreFeed.value.globalChartTracks
             )
@@ -428,7 +522,7 @@ class PlayerViewModel(
             ?: inferredProvider
             ?: SourceProvider.ITUNES
 
-        val isLiked = cleanName in _likedArtistNames.value
+        val isLiked = _likedArtistNames.value.any { it.equals(cleanName, ignoreCase = true) }
 
         _selectedArtistProfile.value = buildArtistProfileObject(
             name = cleanName,
@@ -462,7 +556,7 @@ class PlayerViewModel(
                 name = cleanName,
                 tracksByProvider = groupedByProvider,
                 activeProvider = chosenProvider,
-                isLiked = cleanName in _likedArtistNames.value,
+                isLiked = _likedArtistNames.value.any { it.equals(cleanName, ignoreCase = true) },
                 isLoading = false,
                 bioText = bio?.biography.orEmpty(),
                 bannerOverride = bio?.bannerUrl.orEmpty()
@@ -499,6 +593,7 @@ class PlayerViewModel(
     ): ArtistProfile {
         val isolatedTracks = tracksByProvider[activeProvider].orEmpty()
         val allVerifiedTracks = tracksByProvider.values.flatten()
+        val likedAlbumSet = userSettings.value.tasteProfile.likedAlbums
 
         val heroUrl = bannerOverride.ifBlank {
             isolatedTracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl
@@ -511,13 +606,15 @@ class PlayerViewModel(
             .groupBy { it.album.ifBlank { "${it.title} — Single" } }
             .entries
             .mapIndexed { idx, (albumTitle, albumTracks) ->
+                val albumKey = "${name.trim()}|${albumTitle.trim()}"
                 AlbumSummary(
                     id = "alb_${name}_${activeProvider.name}_$idx",
                     title = albumTitle,
                     artist = name,
                     artworkUrl = albumTracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl ?: heroUrl,
                     releaseYear = albumTracks.firstOrNull()?.releaseYear.orEmpty(),
-                    tracks = albumTracks
+                    tracks = albumTracks,
+                    isLiked = likedAlbumSet.any { it.equals(albumKey, ignoreCase = true) }
                 )
             }
 
@@ -537,31 +634,50 @@ class PlayerViewModel(
     }
 
     fun toggleLikeArtist(artistName: String) {
-        val currentSet = _likedArtistNames.value
-        val updated = if (artistName in currentSet) {
-            currentSet - artistName
-        } else {
-            currentSet + artistName
+        viewModelScope.launch {
+            val updated = preferencesRepository.toggleLikedArtist(artistName)
+            _likedArtistNames.value = updated
+            _selectedArtistProfile.value = _selectedArtistProfile.value?.copy(
+                isLiked = updated.any { it.equals(artistName.trim(), ignoreCase = true) }
+            )
+            refreshExploreFeed()
         }
-        _likedArtistNames.value = updated
-        _selectedArtistProfile.value = _selectedArtistProfile.value?.copy(
-            isLiked = artistName in updated
-        )
     }
 
     // --- SMART ALGORITHMIC PLAYLIST GENERATOR ---
 
     fun generateSmartPlaylist(preset: SmartPlaylistPreset, playImmediately: Boolean = true) {
         viewModelScope.launch {
+            val tasteProfile = userSettings.value.tasteProfile
+            val dna = tasteDnaSummary.value
+            val plTracks = currentPlaylistDomainTracks()
+
+            val dynamicQuery = when (preset) {
+                SmartPlaylistPreset.PERSONAL_DNA_MIX -> {
+                    val topArt = dna.topArtists.firstOrNull().orEmpty()
+                    val topGen = dna.topGenres.firstOrNull()?.primaryQuery ?: preset.defaultQuery
+                    "$topArt $topGen".trim()
+                }
+                SmartPlaylistPreset.MY_TOP_HITS -> {
+                    dna.topArtists.take(2).joinToString(" ").ifBlank { preset.defaultQuery }
+                }
+                SmartPlaylistPreset.DISCOVERY_RADAR -> {
+                    val topGen = dna.topGenres.firstOrNull()?.primaryQuery ?: preset.defaultQuery
+                    "Underground Fresh $topGen"
+                }
+                else -> preset.defaultQuery
+            }
+
             val remotePool = runCatching {
                 musicRepository.searchMultiSource(
-                    query = preset.defaultQuery,
+                    query = dynamicQuery,
                     enabledProviders = userSettings.value.enabledProviders,
                     filter = SourceFilter.ALL
                 )
             }.getOrDefault(emptyList())
 
             val presetSettings = when (preset) {
+                SmartPlaylistPreset.PERSONAL_DNA_MIX -> WaveSettings(contextLabel = preset.title)
                 SmartPlaylistPreset.MY_TOP_HITS -> WaveSettings(character = WaveCharacter.FAVORITE)
                 SmartPlaylistPreset.NIGHT_FOCUS -> WaveSettings(
                     activity = WaveActivity.WORKING,
@@ -579,8 +695,10 @@ class PlayerViewModel(
 
             val combined = (
                 favoriteTracks.value +
+                    plTracks +
                     historyTracks.value +
                     remotePool +
+                    _exploreFeed.value.personalForYouTracks +
                     _exploreFeed.value.trendingFullStreams +
                     _exploreFeed.value.globalChartTracks +
                     _localTracks.value
@@ -589,16 +707,18 @@ class PlayerViewModel(
             val curated = SlantWaveEngine.rankAndFilterWaveCandidates(
                 rawCandidates = combined,
                 settings = presetSettings,
+                tasteProfile = tasteProfile,
                 favoriteTracks = favoriteTracks.value,
+                playlistTracks = plTracks,
                 historyTracks = historyTracks.value,
-                likedArtists = _likedArtistNames.value,
+                likedArtists = _likedArtistNames.value + tasteProfile.selectedArtists,
                 dislikedTrackIds = _dislikedTrackIds.value
-            ).take(20)
+            ).take(22)
 
             if (curated.isNotEmpty()) {
                 val playlistId = musicRepository.createPlaylist(
                     name = preset.title,
-                    description = "${preset.description} (${curated.size} треков)"
+                    description = "${preset.description} (${curated.size} треков • ДНК ${dna.personalizationPercent}%)"
                 )
                 curated.forEach { track ->
                     musicRepository.addTrackToPlaylist(playlistId, track)
@@ -624,6 +744,9 @@ class PlayerViewModel(
     fun dislikeTrack(track: Track) {
         _dislikedTrackIds.value = _dislikedTrackIds.value + track.id
         _waveQueueTracks.value = _waveQueueTracks.value.filterNot { it.id == track.id }
+        viewModelScope.launch {
+            preferencesRepository.addDislikedTrackId(track.id)
+        }
         if (playbackState.value.currentTrack?.id == track.id) {
             playerController.skipNext()
         }
@@ -686,7 +809,23 @@ class PlayerViewModel(
 
     private fun applySearchSort(tracks: List<Track>, sortMode: SearchSortMode): List<Track> {
         return when (sortMode) {
-            SearchSortMode.RELEVANCE -> tracks
+            SearchSortMode.RELEVANCE -> {
+                val tasteProfile = userSettings.value.tasteProfile
+                val plTracks = currentPlaylistDomainTracks()
+                val favArtistsNorm = (_likedArtistNames.value + tasteProfile.selectedArtists + favoriteTracks.value.map { it.artist } + plTracks.map { it.artist })
+                    .map { TrackDeduplicationEngine.normalizeText(TrackDeduplicationEngine.extractPrimaryArtistName(it)) }
+                    .toSet()
+                val targetGenres = tasteProfile.selectedGenres
+
+                tracks.sortedByDescending { track ->
+                    var boost = 0
+                    val artNorm = TrackDeduplicationEngine.normalizeText(TrackDeduplicationEngine.extractPrimaryArtistName(track.artist))
+                    if (artNorm in favArtistsNorm) boost += 300
+                    if (SlantWaveEngine.inferTrackGenres(track).any { it in targetGenres }) boost += 200
+                    if (!track.isPreviewOnly && track.durationSec > 40) boost += 150
+                    boost
+                }
+            }
             SearchSortMode.FULL_TRACKS_FIRST -> tracks.sortedWith(
                 compareByDescending<Track> { !it.isPreviewOnly && it.durationSec > 35 }
                     .thenByDescending { it.durationSec }

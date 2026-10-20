@@ -91,6 +91,225 @@ enum class WaveLanguage(val title: String, val queryHint: String) {
 }
 
 @Serializable
+enum class TasteGenreOption(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val primaryQuery: String,
+    val russianQuery: String,
+    val matchKeywords: List<String>
+) {
+    SYNTHWAVE(
+        id = "synthwave",
+        title = "Синтвейв & Retrowave",
+        subtitle = "Outrun, Darksynth, Cyber, неон 80-х",
+        primaryQuery = "Synthwave Retrowave Outrun",
+        russianQuery = "Русский синтвейв ретровейв",
+        matchKeywords = listOf("synth", "retro", "outrun", "cyber", "darksynth", "синт", "ретро")
+    ),
+    POST_PUNK(
+        id = "post_punk",
+        title = "Пост-панк & Новая волна",
+        subtitle = "Coldwave, Doomer, New Wave, гитарный минимализм",
+        primaryQuery = "Post-Punk Coldwave New Wave",
+        russianQuery = "Русский пост-панк новая волна",
+        matchKeywords = listOf("post-punk", "пост-панк", "coldwave", "new wave", "doomer", "soviet")
+    ),
+    PHONK(
+        id = "phonk",
+        title = "Фонк & Wave Bass",
+        subtitle = "Drift Phonk, Atmospheric Wave, плотный бас",
+        primaryQuery = "Drift Phonk Wave Bass",
+        russianQuery = "Русский фонк дрифт",
+        matchKeywords = listOf("phonk", "фонк", "drift", "memphis", "cowbell", "hardwave")
+    ),
+    INDIE_ALT(
+        id = "indie_alt",
+        title = "Инди & Альтернатива",
+        subtitle = "Indie Rock, Dream Pop, Shoegaze, Bedroom Pop",
+        primaryQuery = "Indie Rock Dream Pop Shoegaze",
+        russianQuery = "Русский инди альтернатива",
+        matchKeywords = listOf("indie", "инди", "alternative", "альтернатив", "dream pop", "shoegaze")
+    ),
+    ELECTRONIC_CLUB(
+        id = "electronic_club",
+        title = "Электроника & Техно",
+        subtitle = "Melodic Techno, House, IDM, Drum & Bass",
+        primaryQuery = "Melodic Techno Deep House Electronic",
+        russianQuery = "Русская электроника техно хаус",
+        matchKeywords = listOf("electronic", "techno", "house", "trance", "dnb", "drum", "idm", "edm", "электрон")
+    ),
+    ROCK_METAL(
+        id = "rock_metal",
+        title = "Рок, Панк & Метал",
+        subtitle = "Classic Rock, Hard Rock, Alternative Metal, Punk",
+        primaryQuery = "Alternative Rock Modern Metal",
+        russianQuery = "Русский рок панк хиты",
+        matchKeywords = listOf("rock", "рок", "metal", "метал", "punk", "панк", "grunge", "guitar")
+    ),
+    HIP_HOP_RAP(
+        id = "hip_hop_rap",
+        title = "Хип-хоп, Рэп & R&B",
+        subtitle = "Boom Bap, Cloud Rap, Melodic Trap, Neo-Soul",
+        primaryQuery = "Hip-Hop Rap Melodic Beats",
+        russianQuery = "Русский хип-хоп рэп",
+        matchKeywords = listOf("hip-hop", "hip hop", "rap", "рэп", "хип-хоп", "trap", "r&b", "beats")
+    ),
+    LOFI_CHILL(
+        id = "lofi_chill",
+        title = "Lo-Fi, Chillhop & Учёба",
+        subtitle = "Мягкие биты, виниловый уют, музыка для концентрации",
+        primaryQuery = "Lofi Chillhop Study Beats",
+        russianQuery = "Лоуфай чилл биты",
+        matchKeywords = listOf("lofi", "lo-fi", "chillhop", "chill", "downtempo", "study", "лоуфай", "чилл")
+    ),
+    POP_DISCO(
+        id = "pop_disco",
+        title = "Поп, Фанк & Nu-Disco",
+        subtitle = "Современный поп, синти-поп, грув и танцы",
+        primaryQuery = "Synth Pop Nu Disco Feel Good",
+        russianQuery = "Русский поп инди поп хиты",
+        matchKeywords = listOf("pop", "поп", "disco", "диско", "funk", "фанк", "dance")
+    ),
+    AMBIENT_SPACE(
+        id = "ambient_space",
+        title = "Эмбиент & Космос",
+        subtitle = "Атмосферные текстуры, глубокий релакс, без слов",
+        primaryQuery = "Space Ambient Atmospheric Instrumental",
+        russianQuery = "Эмбиент атмосферная музыка",
+        matchKeywords = listOf("ambient", "эмбиент", "atmospheric", "space", "drone", "meditation", "sleep")
+    ),
+    NEOCLASSICAL_OST(
+        id = "neoclassical_ost",
+        title = "Неоклассика & Саундтреки",
+        subtitle = "Фортепиано, струнные, кинематографическая музыка",
+        primaryQuery = "Neoclassical Piano Cinematic Soundtrack",
+        russianQuery = "Неоклассика пианино саундтреки",
+        matchKeywords = listOf("neoclassical", "classical", "piano", "cinematic", "soundtrack", "ost", "orchestra", "пианино", "классик")
+    ),
+    JAZZ_SOUL(
+        id = "jazz_soul",
+        title = "Джаз, Соул & Блюз",
+        subtitle = "Саксофон, тёплый грув, лаунж и импровизация",
+        primaryQuery = "Smooth Jazz Neo Soul Groove",
+        russianQuery = "Джаз соул блюз",
+        matchKeywords = listOf("jazz", "soul", "blues", "bossa", "lounge", "джаз", "соул", "блюз")
+    );
+
+    companion object {
+        fun fromId(id: String): TasteGenreOption? = entries.firstOrNull { it.id == id }
+    }
+}
+
+@Serializable
+enum class TasteEraOption(
+    val id: String,
+    val title: String,
+    val queryKeyword: String,
+    val yearPrefixes: List<String>
+) {
+    FRESH_2020S("2020s", "2020–2026 (Свежее)", "2024 2025 Fresh", listOf("2020", "2021", "2022", "2023", "2024", "2025", "2026")),
+    ERA_2010S("2010s", "2010-е", "2010s Best", listOf("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019")),
+    ERA_2000S("2000s", "2000-е", "2000s Hits", listOf("2000", "2001", "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009")),
+    RETRO_80S_90S("80s_90s", "80-е и 90-е", "80s 90s Classics", listOf("198", "199"));
+
+    companion object {
+        fun fromId(id: String): TasteEraOption? = entries.firstOrNull { it.id == id }
+    }
+}
+
+@Serializable
+enum class TasteDiscoveryBalance(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val familiarWeightMultiplier: Double,
+    val discoveryWeightMultiplier: Double
+) {
+    FAVORITE_FOCUSED(
+        id = "favorite_focused",
+        title = "Максимум любимого (80% свои)",
+        subtitle = "Упор на выбранных авторов, лайкнутые треки, альбомы и плейлисты",
+        familiarWeightMultiplier = 1.65,
+        discoveryWeightMultiplier = 0.70
+    ),
+    BALANCED(
+        id = "balanced",
+        title = "Идеальный баланс (60% база / 40% новое)",
+        subtitle = "Любимые авторы и жанры + точные рекомендации похожих треков",
+        familiarWeightMultiplier = 1.25,
+        discoveryWeightMultiplier = 1.15
+    ),
+    DISCOVERY_HUNTER(
+        id = "discovery_hunter",
+        title = "Радар открытий (70% новые имена)",
+        subtitle = "Свежие артисты и редкие треки строго по вашему ДНК-профилю",
+        familiarWeightMultiplier = 0.75,
+        discoveryWeightMultiplier = 1.65
+    );
+
+    companion object {
+        fun fromId(id: String?): TasteDiscoveryBalance =
+            entries.firstOrNull { it.id == id } ?: BALANCED
+    }
+}
+
+@Serializable
+data class StarterArtistSeed(
+    val name: String,
+    val genreId: String,
+    val subtitle: String,
+    val isRussian: Boolean = false
+)
+
+@Serializable
+data class UserTasteProfile(
+    val isOnboardingCompleted: Boolean = false,
+    val selectedGenreIds: Set<String> = emptySet(),
+    val selectedArtists: Set<String> = emptySet(),
+    val likedAlbums: Set<String> = emptySet(), // "Artist|Album"
+    val preferredLanguages: Set<WaveLanguage> = emptySet(),
+    val preferredEras: Set<TasteEraOption> = emptySet(),
+    val discoveryBalance: TasteDiscoveryBalance = TasteDiscoveryBalance.BALANCED,
+    val preferFullLengthTracks: Boolean = true,
+    val autoAdaptFromCollection: Boolean = true
+) {
+    val selectedGenres: List<TasteGenreOption>
+        get() = selectedGenreIds.mapNotNull { TasteGenreOption.fromId(it) }
+
+    val hasAnyExplicitPreferences: Boolean
+        get() = selectedGenreIds.isNotEmpty() ||
+            selectedArtists.isNotEmpty() ||
+            likedAlbums.isNotEmpty() ||
+            preferredLanguages.isNotEmpty() ||
+            preferredEras.isNotEmpty()
+}
+
+@Serializable
+data class UserTasteDnaSummary(
+    val topArtists: List<String> = emptyList(),
+    val topGenres: List<TasteGenreOption> = emptyList(),
+    val topAlbums: List<String> = emptyList(),
+    val dominantLanguageLabel: String = "Мультиязычный",
+    val personalizationPercent: Int = 25,
+    val totalSignalsCount: Int = 0,
+    val likedTracksCount: Int = 0,
+    val playlistTracksCount: Int = 0,
+    val likedAlbumsCount: Int = 0,
+    val selectedArtistsCount: Int = 0
+) {
+    fun buildCompactStatusText(): String {
+        val genresPart = topGenres.take(2).joinToString(", ") { it.title.substringBefore(" &") }
+        val artistsPart = topArtists.take(2).joinToString(", ")
+        return buildList {
+            if (genresPart.isNotBlank()) add(genresPart)
+            if (artistsPart.isNotBlank()) add(artistsPart)
+            add("ДНК $personalizationPercent%")
+        }.joinToString(" • ")
+    }
+}
+
+@Serializable
 data class WaveSettings(
     val activity: WaveActivity? = null,
     val character: WaveCharacter? = null,
@@ -112,7 +331,7 @@ data class WaveSettings(
             mood?.title,
             language?.title
         )
-        return if (parts.isEmpty()) "Персональный поток SlantWave • Авто-подбор" else parts.joinToString(" • ")
+        return if (parts.isEmpty()) "Персональный поток по вашему ДНК и коллекции" else parts.joinToString(" • ")
     }
 
     fun buildSearchQuery(): String {
@@ -128,7 +347,7 @@ data class WaveSettings(
 
 @Serializable
 enum class SearchSortMode(val title: String) {
-    RELEVANCE("Релевантность"),
+    RELEVANCE("По вашему ДНК"),
     FULL_TRACKS_FIRST("Полные треки"),
     QUALITY_HIGH("Битрейт HD"),
     DURATION_DESC("По длительности"),
@@ -150,24 +369,29 @@ enum class SmartPlaylistPreset(
     val description: String,
     val defaultQuery: String
 ) {
+    PERSONAL_DNA_MIX(
+        title = "Мой ДНК-Микс",
+        description = "Максимальное попадание в выбранных авторов, жанры, лайки и плейлисты",
+        defaultQuery = "Best Indie Electronic Synthwave"
+    ),
     MY_TOP_HITS(
         title = "Мои Топ-Хиты",
-        description = "Любимые треки и лидеры истории прослушиваний",
+        description = "Любимые треки, сохранённые альбомы и лидеры прослушиваний",
         defaultQuery = "Top Hits Electronic Indie"
     ),
     NIGHT_FOCUS(
         title = "Ночной Фокус & Чилл",
-        description = "Инструментальный Lo-Fi, эмбиент и спокойные треки без слов",
+        description = "Инструментальный Lo-Fi, эмбиент и спокойные треки под ваш вкус",
         defaultQuery = "Lofi Chillhop Ambient Instrumental"
     ),
     WORKOUT_ENERGY(
         title = "Драйв & Тренировка",
-        description = "Бодрый электро-драйв, синтвейв, фонк и рок",
+        description = "Бодрый электро-драйв, синтвейв, фонк и рок из ваших жанров",
         defaultQuery = "Synthwave Phonk Electro Workout"
     ),
     DISCOVERY_RADAR(
         title = "Радар Открытий",
-        description = "Свежие треки артистов, которых ещё нет в вашей истории",
+        description = "Новые артисты и редкие релизы на основе вашего ДНК-профиля",
         defaultQuery = "Underground Indie Fresh Electronic"
     )
 }
@@ -199,7 +423,8 @@ data class Track(
     val localUri: String? = null,
     val isFavorite: Boolean = false,
     val isCachedOffline: Boolean = false,
-    val offlineFilePath: String? = null
+    val offlineFilePath: String? = null,
+    val recommendationReason: String = ""
 ) {
     val formattedDuration: String
         get() {
@@ -250,8 +475,12 @@ data class AlbumSummary(
     val artist: String,
     val artworkUrl: String,
     val releaseYear: String = "",
-    val tracks: List<Track> = emptyList()
-)
+    val tracks: List<Track> = emptyList(),
+    val isLiked: Boolean = false
+) {
+    val albumKey: String
+        get() = "${artist.trim()}|${title.trim()}"
+}
 
 @Serializable
 data class ArtistProfile(
@@ -273,8 +502,8 @@ enum class LibrarySubCategory(val id: String, val title: String, val subtitle: S
     PLAYLISTS("playlists", "Плейлисты", "Ваши подборки и умные авто-плейлисты"),
     OFFLINE("offline", "Скачанные треки", "Сохранённые в оффлайн-кэш композиции"),
     LOCAL_FILES("local_files", "Файлы на устройстве", "Локальная аудиотека смартфона (MediaStore)"),
-    ALBUMS("albums", "Альбомы и релизы", "Альбомы и синглы из вашей коллекции"),
-    ARTISTS("artists", "Исполнители", "Артисты из любимых треков и истории"),
+    ALBUMS("albums", "Альбомы и релизы", "Любимые альбомы и синглы из вашей коллекции"),
+    ARTISTS("artists", "Исполнители", "Выбранные и любимые артисты"),
     HISTORY("history", "История прослушиваний", "Хронология недавно воспроизведённых треков");
 
     companion object {
@@ -285,6 +514,7 @@ enum class LibrarySubCategory(val id: String, val title: String, val subtitle: S
 
 @Serializable
 enum class SettingsSubCategory(val id: String, val title: String, val subtitle: String) {
+    TASTE_DNA("taste_dna", "Музыкальный ДНК и вкусы", "Предварительная настройка авторов, жанров, эпох и алгоритмов рекомендаций"),
     AUDIO_DSP("audio_dsp", "Звук и DSP Эквалайзер", "5-полосный эквалайзер, Bass Boost, 3D Virtualizer и Loudness"),
     STREAMING_QUALITY("streaming_quality", "Качество потока и сеть", "Выбор битрейта, фейловер зеркал и сетевой буфер"),
     PROVIDERS_HUB("providers_hub", "Источники музыки (8 нод)", "Управление провайдерами, пинг зеркал и статус API"),
@@ -295,7 +525,7 @@ enum class SettingsSubCategory(val id: String, val title: String, val subtitle: 
 
     companion object {
         fun fromId(id: String?): SettingsSubCategory =
-            entries.firstOrNull { it.id == id } ?: HOME_WIDGETS
+            entries.firstOrNull { it.id == id } ?: TASTE_DNA
     }
 }
 

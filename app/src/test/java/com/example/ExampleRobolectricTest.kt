@@ -92,4 +92,70 @@ class ExampleRobolectricTest {
         assertNotNull(mediumViews)
         assertNotNull(largeViews)
     }
+
+    @Test
+    fun tasteDnaEngine_synthesizesPreConfigurationAndCollectionSignals() {
+        val profile = com.example.domain.UserTasteProfile(
+            isOnboardingCompleted = true,
+            selectedGenreIds = setOf("PHONK", "SYNTHWAVE"),
+            selectedArtists = setOf("Kordhell", "The Weeknd"),
+            likedAlbums = setOf("The Weeknd|After Hours")
+        )
+        val likedTrack = Track(
+            id = "fav_1",
+            title = "Murder In My Mind",
+            artist = "Kordhell",
+            album = "Phonk Anthology",
+            genre = "Drift Phonk",
+            durationSec = 145,
+            primaryProvider = SourceProvider.JAMENDO,
+            streamUrl = "https://mp3d.jamendo.com/download/track/10/mp32/"
+        )
+        val dna = com.example.domain.SlantWaveEngine.computeTasteDnaSummary(
+            tasteProfile = profile,
+            favoriteTracks = listOf(likedTrack),
+            playlistTracks = emptyList(),
+            historyTracks = emptyList(),
+            likedArtists = setOf("Kordhell")
+        )
+        assertEquals(true, dna.personalizationPercent >= 60)
+        assertEquals(true, dna.topArtists.any { it.equals("Kordhell", ignoreCase = true) })
+
+        val candidateMatch = Track(
+            id = "cand_1",
+            title = "Blinding Lights",
+            artist = "The Weeknd",
+            album = "After Hours",
+            genre = "Synthwave",
+            durationSec = 200,
+            primaryProvider = SourceProvider.JAMENDO,
+            streamUrl = "https://mp3d.jamendo.com/download/track/11/mp32/"
+        )
+        val candidateOther = Track(
+            id = "cand_2",
+            title = "Random Acoustic Song",
+            artist = "Unknown Folk",
+            album = "Random",
+            genre = "Country",
+            durationSec = 180,
+            primaryProvider = SourceProvider.ITUNES,
+            streamUrl = "https://example.com/preview.m4a",
+            isPreviewOnly = true
+        )
+
+        val ranked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+            rawCandidates = listOf(candidateOther, candidateMatch),
+            settings = com.example.domain.WaveSettings(),
+            tasteProfile = profile,
+            favoriteTracks = listOf(likedTrack),
+            playlistTracks = emptyList(),
+            historyTracks = emptyList(),
+            likedArtists = setOf("Kordhell"),
+            dislikedTrackIds = emptySet()
+        )
+        assertEquals("cand_1", ranked.first().id)
+        assertEquals(true, ranked.first().recommendationReason.isNotBlank())
+    }
 }
+
+

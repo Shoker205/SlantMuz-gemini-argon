@@ -87,6 +87,7 @@ fun ArtistScreen(
     onPlayTrailer: (Track) -> Unit,
     onStartArtistWave: (String) -> Unit,
     onToggleLikeArtist: (String) -> Unit,
+    onToggleLikeAlbum: (String, String) -> Unit = { _, _ -> },
     onSelectProvider: (SourceProvider) -> Unit = {},
     onOpenTrackMenu: (Track) -> Unit,
     modifier: Modifier = Modifier
@@ -600,6 +601,7 @@ fun ArtistScreen(
                         items(artistProfile.albums, key = { it.id }) { album ->
                             AlbumCarouselCard(
                                 album = album,
+                                onToggleLike = { onToggleLikeAlbum(album.artist, album.title) },
                                 onClick = {
                                     val first = album.tracks.firstOrNull()
                                     if (first != null) {
@@ -787,6 +789,7 @@ private fun ArtistTrackRow(
 @Composable
 private fun AlbumCarouselCard(
     album: AlbumSummary,
+    onToggleLike: () -> Unit,
     onClick: () -> Unit
 ) {
     Column(
@@ -817,6 +820,24 @@ private fun AlbumCarouselCard(
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(40.dp)
+                )
+            }
+
+            IconButton(
+                onClick = onToggleLike,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.52f))
+                    .testTag("like_album_btn_${album.id}")
+            ) {
+                Icon(
+                    imageVector = if (album.isLiked) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = "Сохранить альбом в ДНК",
+                    tint = if (album.isLiked) Color(0xFFE11D48) else Color.White,
+                    modifier = Modifier.size(17.dp)
                 )
             }
         }

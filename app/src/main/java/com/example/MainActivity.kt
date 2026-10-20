@@ -71,6 +71,7 @@ import com.example.ui.components.EqualizerBottomSheet
 import com.example.ui.components.LyricsBottomSheet
 import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.PastelAuroraBackground
+import com.example.ui.components.TasteOnboardingSheet
 import com.example.ui.components.TrackActionsBottomSheet
 import com.example.ui.components.WaveSettingsBottomSheet
 import com.example.ui.screens.AddToPlaylistDialog
@@ -162,8 +163,16 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     val exoCacheBytes by viewModel.exoCacheUsedBytes.collectAsStateWithLifecycle()
     val roomOfflineBytes by viewModel.totalOfflineBytes.collectAsStateWithLifecycle()
     val waveSettings by viewModel.waveSettings.collectAsStateWithLifecycle()
+    val isWaveGenerating by viewModel.isWaveGenerating.collectAsStateWithLifecycle()
+    val waveQueueTracks by viewModel.waveQueueTracks.collectAsStateWithLifecycle()
+    val searchSortMode by viewModel.searchSortMode.collectAsStateWithLifecycle()
     val selectedArtistProfile by viewModel.selectedArtistProfile.collectAsStateWithLifecycle()
     val likedArtistNames by viewModel.likedArtistNames.collectAsStateWithLifecycle()
+    val tasteDnaSummary by viewModel.tasteDnaSummary.collectAsStateWithLifecycle()
+    val likedAlbumKeys = userSettings.tasteProfile.likedAlbums
+    val playlistDomainTracks = remember(playlists) {
+        playlists.flatMap { pw -> pw.tracks.map { it.toDomain() } }
+    }
 
     // Reset triggers incremented when user taps/re-taps a dockbar section
     var exploreResetTrigger by remember { mutableIntStateOf(0) }
@@ -175,6 +184,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showWaveSettingsSheet by remember { mutableStateOf(false) }
+    var showTasteSetupSheet by remember { mutableStateOf(false) }
     var trackForActionsSheet by remember { mutableStateOf<Track?>(null) }
     var trackToAddToPlaylist by remember { mutableStateOf<Track?>(null) }
 
@@ -245,7 +255,13 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     }
 
     val allCatalogPool = remember(exploreFeed, favoriteTracks, historyTracks) {
-        (exploreFeed.trendingFullStreams + exploreFeed.globalChartTracks + favoriteTracks + historyTracks)
+        (exploreFeed.personalForYouTracks +
+            exploreFeed.favoriteArtistsTracks +
+            exploreFeed.genreRadarTracks +
+            exploreFeed.trendingFullStreams +
+            exploreFeed.globalChartTracks +
+            favoriteTracks +
+            historyTracks)
             .distinctBy { it.id }
     }
 
@@ -392,6 +408,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             waveSettings = waveSettings,
                             isWaveGenerating = isWaveGenerating,
                             waveQueueTracks = waveQueueTracks,
+                            tasteDnaSummary = tasteDnaSummary,
                             resetTrigger = exploreResetTrigger,
                             onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
                             onPlayPause = { viewModel.togglePlayPause() },
@@ -402,6 +419,13 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onAddToPlaylist = { trackToAddToPlaylist = it },
                             onOpenTrackMenu = { trackForActionsSheet = it },
                             onOpenWaveSettings = { showWaveSettingsSheet = true },
+                            onOpenTasteSetup = { showTasteSetupSheet = true },
+                            onOpenArtist = { artistName ->
+                                viewModel.openArtistProfile(artistName)
+                                navController.navigate(SlantDestinations.ROUTE_ARTIST) {
+                                    launchSingleTop = true
+                                }
+                            },
                             onStartMyWave = {
                                 viewModel.launchWave(waveSettings)
                                 navController.navigate(SlantDestinations.ROUTE_PLAYER) {
@@ -463,21 +487,39 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
 
                     composable(SlantDestinations.ROUTE_PLAYER) {
                         val currentTrack = playbackState.currentTrack
-                        val similarForPlayer = remember(currentTrack, allCatalogPool) {
+                        val similarForPlayer = remember(
+                            currentTrack,
+                            allCatalogPool,
+                            userSettings.tasteProfile,
+                            favoriteTracks,
+                            playlistDomainTracks,
+                            historyTracks,
+                            likedArtistNames,
+                            waveSettings
+                        ) {
                             if (currentTrack == null) {
                                 allCatalogPool.take(6)
                             } else {
                                 val targetGenre = currentTrack.genre.lowercase()
                                 val isTargetRu = com.example.domain.SlantWaveEngine.isRussianTrack(currentTrack)
-                                allCatalogPool
-                                    .filter { it.id != currentTrack.id && !it.isLiveStream }
+                                val candidates = allCatalogPool.filter { it.id != currentTrack.id && !it.isLiveStream }
+                                val dnaRanked = com.example.domain.SlantWaveEngine.rankAndFilterWaveCandidates(
+                                    rawCandidates = candidates,
+                                    settings = waveSettings,
+                                    tasteProfile = userSettings.tasteProfile,
+                                    favoriteTracks = favoriteTracks,
+                                    playlistTracks = playlistDomainTracks,
+                                    historyTracks = historyTracks,
+                                    likedArtists = likedArtistNames + userSettings.tasteProfile.selectedArtists,
+                                    dislikedTrackIds = userSettings.dislikedTrackIds
+                                )
+                                dnaRanked
                                     .sortedByDescending { candidate ->
-                                        var s = 0
-                                        if (com.example.domain.TrackDeduplicationEngine.isTrackByArtist(candidate, currentTrack.artist)) s += 50
-                                        if (candidate.genre.lowercase() == targetGenre) s += 35
-                                        if (com.example.domain.SlantWaveEngine.isRussianTrack(candidate) == isTargetRu) s += 20
-                                        if (!candidate.isPreviewOnly) s += 15
-                                        s
+                                        var bonus = 0
+                                        if (com.example.domain.TrackDeduplicationEngine.isTrackByArtist(candidate, currentTrack.artist)) bonus += 75
+                                        if (candidate.genre.lowercase() == targetGenre) bonus += 40
+                                        if (com.example.domain.SlantWaveEngine.isRussianTrack(candidate) == isTargetRu) bonus += 20
+                                        bonus
                                     }
                                     .take(6)
                             }
@@ -533,6 +575,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             historyTracks = historyTracks,
                             playlists = playlists,
                             likedArtistNames = likedArtistNames,
+                            likedAlbumKeys = likedAlbumKeys,
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             downloadingIds = downloadingIds,
@@ -568,6 +611,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                                 }
                             },
                             onOpenWaveSettings = { showWaveSettingsSheet = true },
+                            onOpenTasteSetup = { showTasteSetupSheet = true },
                             onNavigateToSearch = { q ->
                                 if (q.isNotBlank()) {
                                     viewModel.submitSearchNow(q)
@@ -590,6 +634,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             historyTracks = historyTracks,
                             playlists = playlists,
                             likedArtistNames = likedArtistNames,
+                            likedAlbumKeys = likedAlbumKeys,
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             downloadingIds = downloadingIds,
@@ -648,6 +693,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                                 }
                             },
                             onToggleLikeArtist = { viewModel.toggleLikeArtist(it) },
+                            onToggleLikeAlbum = { artist, album -> viewModel.toggleLikeAlbum(artist, album) },
                             onSelectProvider = { viewModel.selectArtistProvider(it) },
                             onOpenTrackMenu = { trackForActionsSheet = it }
                         )
@@ -666,7 +712,8 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                                     launchSingleTop = true
                                 }
                             },
-                            onOpenEqualizer = { showEqualizerSheet = true }
+                            onOpenEqualizer = { showEqualizerSheet = true },
+                            onOpenTasteSetup = { showTasteSetupSheet = true }
                         )
                     }
 
@@ -697,7 +744,8 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onMaxCacheSizeChange = { viewModel.setMaxCacheSizeMb(it) },
                             onClearAllCaches = { viewModel.clearAllCaches() },
                             onSyncRemoteConfig = { viewModel.syncFirebaseRemoteConfig() },
-                            onOverrideBitrate = { viewModel.setRemoteBitrateOverride(it) }
+                            onOverrideBitrate = { viewModel.setRemoteBitrateOverride(it) },
+                            onOpenTasteSetup = { showTasteSetupSheet = true }
                         )
                     }
                 }
@@ -716,7 +764,28 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                 }
             },
             onReset = { viewModel.resetWaveSettings() },
+            onOpenTasteSetup = { showTasteSetupSheet = true },
             onDismiss = { showWaveSettingsSheet = false }
+        )
+    }
+
+    if (showTasteSetupSheet) {
+        TasteOnboardingSheet(
+            currentProfile = userSettings.tasteProfile,
+            dnaSummary = tasteDnaSummary,
+            favoriteTracks = favoriteTracks,
+            playlistTracks = playlistDomainTracks,
+            historyTracks = historyTracks,
+            onSaveProfile = { newProfile, launchWaveNow ->
+                viewModel.saveUserTasteProfile(newProfile, launchWaveImmediately = launchWaveNow)
+                showTasteSetupSheet = false
+                if (launchWaveNow) {
+                    navController.navigate(SlantDestinations.ROUTE_PLAYER) {
+                        launchSingleTop = true
+                    }
+                }
+            },
+            onDismiss = { showTasteSetupSheet = false }
         )
     }
 

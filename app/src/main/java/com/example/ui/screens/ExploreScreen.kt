@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,12 +20,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
@@ -61,6 +65,8 @@ import com.example.data.remote.ExploreFeedData
 import com.example.domain.SlantWaveEngine
 import com.example.domain.SmartPlaylistPreset
 import com.example.domain.Track
+import com.example.domain.UserTasteDnaSummary
+import com.example.domain.UserTasteProfile
 import com.example.domain.WaveActivity
 import com.example.domain.WaveCharacter
 import com.example.domain.WaveLanguage
@@ -88,6 +94,8 @@ fun ExploreScreen(
     activeLyricLine: String?,
     downloadingIds: Set<String>,
     waveSettings: WaveSettings = WaveSettings(),
+    tasteProfile: UserTasteProfile = UserTasteProfile(),
+    tasteDnaSummary: UserTasteDnaSummary = UserTasteDnaSummary(),
     isWaveGenerating: Boolean = false,
     waveQueueTracks: List<Track> = emptyList(),
     resetTrigger: Int = 0,
@@ -100,6 +108,8 @@ fun ExploreScreen(
     onAddToPlaylist: (Track) -> Unit,
     onOpenTrackMenu: (Track) -> Unit = {},
     onOpenWaveSettings: () -> Unit = {},
+    onOpenTasteSetup: () -> Unit = {},
+    onOpenArtist: (String) -> Unit = {},
     onStartMyWave: () -> Unit = {},
     onResetWaveSettings: () -> Unit = {},
     onQuickGenreClick: (String) -> Unit,
@@ -144,7 +154,7 @@ fun ExploreScreen(
         contentPadding = PaddingValues(bottom = 128.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Interactive "Моя волна" (SlantWave) Hero Card with Live Algorithmic Status
+        // 1. Interactive "Моя волна" (SlantWave) Hero Card with Live Algorithmic & DNA Status
         item {
             LiquidGlassCard(
                 cornerRadius = 26.dp,
@@ -186,20 +196,18 @@ fun ExploreScreen(
                                     text = if (isWaveGenerating) {
                                         "Синтез волны: ${waveSettings.summarySubtitle()}…"
                                     } else {
-                                        waveSettings.summarySubtitle()
+                                        "${waveSettings.summarySubtitle()} • ${tasteDnaSummary.buildCompactStatusText()}"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = if (waveSettings.isCustomized) SlantCyan else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                if (waveSettings.isCustomized) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    val eqPreset = SlantWaveEngine.recommendedEqualizerPreset(waveSettings)
-                                    Text(
-                                        text = "Фильтров: ${waveSettings.activeFilterCount} • DSP: ${eqPreset.displayName}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val eqPreset = SlantWaveEngine.recommendedEqualizerPreset(waveSettings, tasteProfile)
+                                Text(
+                                    text = "ДНК-ориентация: ${tasteDnaSummary.personalizationPercent}% • DSP: ${eqPreset.displayName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
 
                             Spacer(modifier = Modifier.width(12.dp))
@@ -268,9 +276,9 @@ fun ExploreScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = if (waveSettings.isCustomized) {
-                                        "Настроить (${waveSettings.activeFilterCount})"
+                                        "Фильтры (${waveSettings.activeFilterCount})"
                                     } else {
-                                        "Настроить"
+                                        "Фильтры"
                                     },
                                     style = MaterialTheme.typography.labelLarge,
                                     maxLines = 1
@@ -342,6 +350,103 @@ fun ExploreScreen(
             }
         }
 
+        // 1b. User Musical DNA & Pre-Configuration Banner Card ("Предварительная настройка вкусов")
+        item {
+            LiquidGlassCard(
+                cornerRadius = 22.dp,
+                tintColor = SlantViolet,
+                onClick = onOpenTasteSetup,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .testTag("open_taste_dna_card")
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        Brush.linearGradient(listOf(SlantCyan, SlantViolet, SlantMagenta))
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = Color(0xFF0E1118),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Музыкальный ДНК • Предварительная настройка",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = if (tasteProfile.hasAnyExplicitPreferences) {
+                                        "Точность: ${tasteDnaSummary.personalizationPercent}% • ${tasteProfile.discoveryBalance.title}"
+                                    } else {
+                                        "Выберите любимых авторов, жанры и эпохи для 100% точности подборок"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SlantCyan,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Surface(
+                            onClick = onOpenTasteSetup,
+                            shape = RoundedCornerShape(14.dp),
+                            color = SlantCyan.copy(alpha = 0.2f),
+                            border = BorderStroke(1.dp, SlantCyan.copy(alpha = 0.5f)),
+                            modifier = Modifier.testTag("open_taste_dna_btn")
+                        ) {
+                            Text(
+                                text = "Настроить ДНК",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = SlantCyan,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = buildString {
+                            val genres = tasteDnaSummary.topGenres.take(3).joinToString(", ") { it.title.substringBefore(" &") }
+                            val artists = tasteDnaSummary.topArtists.take(4).joinToString(", ")
+                            append("Жанры: ${genres.ifBlank { "Все" }}")
+                            if (artists.isNotBlank()) append(" • Авторы: $artists")
+                            append(" • База: ♥ ${tasteDnaSummary.likedTracksCount} треков, ♪ ${tasteDnaSummary.playlistTracksCount} в плейлистах")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
         // 2. Quick Interactive Algorithmic Wave Filter Chips (shows active state & toggles live)
         item {
             LazyRow(
@@ -373,7 +478,71 @@ fun ExploreScreen(
             }
         }
 
-        // 2b. Live Synthesized Wave Queue Preview (when wave settings are active or wave was launched)
+        // 2b. Quick Favorite Artists Bar from User DNA (tapping opens isolated Artist Profile)
+        if (tasteDnaSummary.topArtists.isNotEmpty()) {
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Ваши авторы в ДНК (${tasteDnaSummary.topArtists.size})",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Добавить авторов →",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SlantCyan,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clickable { onOpenTasteSetup() }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(tasteDnaSummary.topArtists, key = { "dna_art_$it" }) { artistName ->
+                            Surface(
+                                onClick = { onOpenArtist(artistName) },
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                border = BorderStroke(1.dp, SlantViolet.copy(alpha = 0.35f)),
+                                modifier = Modifier.testTag("dna_artist_chip_$artistName")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = SlantViolet,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = artistName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2c. Live Synthesized Wave Queue Preview (when wave settings are active or wave was launched)
         if (waveQueueTracks.isNotEmpty()) {
             item {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -420,7 +589,9 @@ fun ExploreScreen(
         }
 
         // 3. Convenient Smart Media Notification Control Card
-        val previewTrack = currentTrack ?: exploreFeed.trendingFullStreams.firstOrNull()
+        val previewTrack = currentTrack
+            ?: exploreFeed.personalForYouTracks.firstOrNull()
+            ?: exploreFeed.trendingFullStreams.firstOrNull()
         if (previewTrack != null) {
             item {
                 RichMediaNotificationPreviewCard(
@@ -438,7 +609,7 @@ fun ExploreScreen(
             }
         }
 
-        // 3b. Algorithmic Smart Mixes ("Умные подборки дня")
+        // 3b. Algorithmic Smart Mixes ("Умные подборки дня по ДНК")
         item {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -455,7 +626,7 @@ fun ExploreScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Алгоритмические миксы • Собрать и слушать",
+                        text = "Персональные миксы • Собрать по вашему ДНК",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold
@@ -471,12 +642,12 @@ fun ExploreScreen(
                             onClick = { onGenerateSmartPlaylist(preset) },
                             shape = RoundedCornerShape(18.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            border = androidx.compose.foundation.BorderStroke(
+                            border = BorderStroke(
                                 1.dp,
                                 SlantEmerald.copy(alpha = 0.35f)
                             ),
                             modifier = Modifier
-                                .width(205.dp)
+                                .width(210.dp)
                                 .testTag("smart_mix_${preset.name}")
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
@@ -512,7 +683,7 @@ fun ExploreScreen(
             }
         }
 
-        if (isLoading && exploreFeed.trendingFullStreams.isEmpty() && exploreFeed.globalChartTracks.isEmpty()) {
+        if (isLoading && exploreFeed.personalForYouTracks.isEmpty() && exploreFeed.trendingFullStreams.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -524,7 +695,7 @@ fun ExploreScreen(
                         CircularProgressIndicator(color = accentColor)
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Синхронизация открытых аудио-нод…",
+                            text = "Синтез персональных подборок по вашему Музыкальному ДНК…",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -533,7 +704,125 @@ fun ExploreScreen(
             }
         }
 
-        // 4. Live Online Radio Stations Carousel
+        // 4. SECTION: "Специально для вас • По вашим вкусам, лайкам и плейлистам"
+        if (exploreFeed.personalForYouTracks.isNotEmpty()) {
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    Text(
+                        text = "Специально для вас • По вашему ДНК (${tasteDnaSummary.personalizationPercent}%)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = SlantCyan,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "Собрано на основе выбранных авторов, жанров, лайкнутых треков, плейлистов и альбомов",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            items(
+                exploreFeed.personalForYouTracks.take(8),
+                key = { "foryou_${it.id}" }
+            ) { track ->
+                TrackItemCard(
+                    track = track,
+                    isCurrentTrack = currentTrack?.id == track.id,
+                    isPlaying = isPlaying,
+                    isDownloading = track.id in downloadingIds,
+                    onTrackClick = { onPlayTrack(track, exploreFeed.personalForYouTracks) },
+                    onFavoriteClick = { onToggleFavorite(track) },
+                    onDownloadClick = { onDownloadOffline(track) },
+                    onAddToPlaylistClick = { onAddToPlaylist(track) },
+                    onMoreClick = { onOpenTrackMenu(track) },
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+        }
+
+        // 5. SECTION: "По вашим любимым авторам и альбомам" (Horizontal Carousel)
+        if (exploreFeed.favoriteArtistsTracks.isNotEmpty()) {
+            item {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = null,
+                            tint = SlantMagenta,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "По вашим любимым авторам и альбомам",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(exploreFeed.favoriteArtistsTracks, key = { "fav_art_${it.id}" }) { track ->
+                            LiveRadioCard(
+                                station = track,
+                                isPlaying = currentTrack?.id == track.id && isPlaying,
+                                onClick = { onPlayTrack(track, exploreFeed.favoriteArtistsTracks) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. SECTION: "Радар ваших жанров"
+        if (exploreFeed.genreRadarTracks.isNotEmpty()) {
+            val genresTitle = tasteDnaSummary.topGenres.take(2)
+                .joinToString(", ") { it.title.substringBefore(" &") }
+                .ifBlank { "Новые открытия" }
+            item {
+                Text(
+                    text = "Радар ваших жанров • $genresTitle",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            items(
+                exploreFeed.genreRadarTracks.take(6),
+                key = { "genreradar_${it.id}" }
+            ) { track ->
+                TrackItemCard(
+                    track = track,
+                    isCurrentTrack = currentTrack?.id == track.id,
+                    isPlaying = isPlaying,
+                    isDownloading = track.id in downloadingIds,
+                    onTrackClick = { onPlayTrack(track, exploreFeed.genreRadarTracks) },
+                    onFavoriteClick = { onToggleFavorite(track) },
+                    onDownloadClick = { onDownloadOffline(track) },
+                    onAddToPlaylistClick = { onAddToPlaylist(track) },
+                    onMoreClick = { onOpenTrackMenu(track) },
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+        }
+
+        // 7. Live Online Radio Stations Carousel (Matched to user's genre/language)
         if (exploreFeed.liveRadioStations.isNotEmpty()) {
             item {
                 Column {
@@ -551,7 +840,7 @@ fun ExploreScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Живое радио (Radio Browser)",
+                            text = "Живое радио под ваш вкус",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.SemiBold,
@@ -576,11 +865,11 @@ fun ExploreScreen(
             }
         }
 
-        // 5. Full-Length Open HD Streams (Jamendo 320kbps + Audius Web3)
+        // 8. Full-Length Open HD Streams (Jamendo 320kbps + Audius Web3)
         if (exploreFeed.trendingFullStreams.isNotEmpty()) {
             item {
                 Text(
-                    text = "В стиле Моей волны • Полные треки 320kbps",
+                    text = "Полные HD-треки 320kbps • В стиле вашей волны",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
@@ -608,11 +897,11 @@ fun ExploreScreen(
             }
         }
 
-        // 6. Global Charts (Deezer HD 1000x1000 + iTunes)
+        // 9. Global Charts (Deezer HD 1000x1000 + iTunes)
         if (exploreFeed.globalChartTracks.isNotEmpty()) {
             item {
                 Text(
-                    text = "Популярные треки & Мировые чарты",
+                    text = "Популярные треки & Хиты по вашим интересам",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold,
@@ -622,7 +911,7 @@ fun ExploreScreen(
                 )
             }
             items(
-                exploreFeed.globalChartTracks.take(10),
+                exploreFeed.globalChartTracks.take(8),
                 key = { "chart_${it.id}" }
             ) { track ->
                 TrackItemCard(
@@ -654,14 +943,14 @@ private fun LiveRadioCard(
         tintColor = if (isPlaying) SlantCyan else SlantViolet,
         onClick = onClick,
         modifier = Modifier
-            .width(150.dp)
+            .width(156.dp)
             .testTag("radio_station_card_${station.id}")
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(72.dp)
+                    .height(74.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(
                         Brush.linearGradient(
@@ -706,6 +995,15 @@ private fun LiveRadioCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (station.recommendationReason.isNotBlank()) {
+                Text(
+                    text = station.recommendationReason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SlantCyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

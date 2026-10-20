@@ -340,6 +340,17 @@ fun TrackItemCard(
                             modifier = Modifier.size(13.dp)
                         )
                     }
+                    if (track.recommendationReason.isNotBlank()) {
+                        Text(
+                            text = track.recommendationReason,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SlantCyan,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                 }
             }
 

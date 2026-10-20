@@ -95,6 +95,7 @@ fun LibraryScreen(
     historyTracks: List<Track>,
     playlists: List<PlaylistWithTracks>,
     likedArtistNames: Set<String> = emptySet(),
+    likedAlbumKeys: Set<String> = emptySet(),
     currentTrack: Track?,
     isPlaying: Boolean,
     downloadingIds: Set<String>,
@@ -112,6 +113,7 @@ fun LibraryScreen(
     onOpenTrackMenu: (Track) -> Unit = {},
     onStartCollectionWave: () -> Unit = {},
     onOpenWaveSettings: () -> Unit = {},
+    onOpenTasteSetup: () -> Unit = {},
     onNavigateToSearch: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -144,8 +146,8 @@ fun LibraryScreen(
         (explicitLiked + fromTracks).distinctBy { it.first.lowercase() }.take(12)
     }
 
-    val userAlbums = remember(userCollectionTracks) {
-        userCollectionTracks
+    val userAlbums = remember(userCollectionTracks, likedAlbumKeys) {
+        val fromCollection = userCollectionTracks
             .filter { it.album.isNotBlank() || it.artist.isNotBlank() }
             .groupBy { it.album.ifBlank { "${it.title} — Single" } }
             .entries
@@ -156,9 +158,31 @@ fun LibraryScreen(
                     artist = tracks.first().artist,
                     artworkUrl = tracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
                     releaseYear = tracks.firstOrNull()?.releaseYear.orEmpty(),
-                    tracks = tracks
+                    tracks = tracks,
+                    isLiked = true
                 )
             }
+        val fromLikedKeys = likedAlbumKeys.mapIndexedNotNull { idx, key ->
+            val parts = key.split("|")
+            val artist = parts.getOrNull(0)?.trim().orEmpty()
+            val albumTitle = parts.getOrNull(1)?.trim().orEmpty()
+            if (albumTitle.isBlank()) null
+            else {
+                val matching = userCollectionTracks.filter {
+                    it.album.equals(albumTitle, ignoreCase = true)
+                }
+                AlbumSummary(
+                    id = "liked_alb_$idx",
+                    title = albumTitle,
+                    artist = artist.ifBlank { matching.firstOrNull()?.artist.orEmpty() },
+                    artworkUrl = matching.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+                    releaseYear = matching.firstOrNull()?.releaseYear.orEmpty(),
+                    tracks = matching,
+                    isLiked = true
+                )
+            }
+        }
+        (fromLikedKeys + fromCollection).distinctBy { "${it.artist.lowercase()}|${it.title.lowercase()}" }
     }
 
     Column(
@@ -229,6 +253,13 @@ fun LibraryScreen(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                     )
                 }
+            }
+            item {
+                CategoryQuickChip(
+                    label = "Моё ДНК / Вкусы",
+                    testTag = "library_tab_dna",
+                    onClick = onOpenTasteSetup
+                )
             }
             item {
                 CategoryQuickChip(
@@ -672,6 +703,7 @@ fun LibrarySubCategoryScreen(
     historyTracks: List<Track>,
     playlists: List<PlaylistWithTracks>,
     likedArtistNames: Set<String>,
+    likedAlbumKeys: Set<String> = emptySet(),
     currentTrack: Track?,
     isPlaying: Boolean,
     downloadingIds: Set<String>,
@@ -708,8 +740,8 @@ fun LibrarySubCategoryScreen(
         (favoriteTracks + offlineTracks + localTracks + historyTracks).distinctBy { it.id }
     }
 
-    val userAlbums = remember(userCollectionTracks) {
-        userCollectionTracks
+    val userAlbums = remember(userCollectionTracks, likedAlbumKeys) {
+        val fromCollection = userCollectionTracks
             .filter { it.album.isNotBlank() || it.artist.isNotBlank() }
             .groupBy { it.album.ifBlank { "${it.title} — Single" } }
             .entries
@@ -720,9 +752,31 @@ fun LibrarySubCategoryScreen(
                     artist = tracks.first().artist,
                     artworkUrl = tracks.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
                     releaseYear = tracks.firstOrNull()?.releaseYear.orEmpty(),
-                    tracks = tracks
+                    tracks = tracks,
+                    isLiked = true
                 )
             }
+        val fromLikedKeys = likedAlbumKeys.mapIndexedNotNull { idx, key ->
+            val parts = key.split("|")
+            val artist = parts.getOrNull(0)?.trim().orEmpty()
+            val albumTitle = parts.getOrNull(1)?.trim().orEmpty()
+            if (albumTitle.isBlank()) null
+            else {
+                val matching = userCollectionTracks.filter {
+                    it.album.equals(albumTitle, ignoreCase = true)
+                }
+                AlbumSummary(
+                    id = "liked_alb_$idx",
+                    title = albumTitle,
+                    artist = artist.ifBlank { matching.firstOrNull()?.artist.orEmpty() },
+                    artworkUrl = matching.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
+                    releaseYear = matching.firstOrNull()?.releaseYear.orEmpty(),
+                    tracks = matching,
+                    isLiked = true
+                )
+            }
+        }
+        (fromLikedKeys + fromCollection).distinctBy { "${it.artist.lowercase()}|${it.title.lowercase()}" }
     }
 
     val userArtists = remember(likedArtistNames, favoriteTracks, historyTracks, localTracks) {

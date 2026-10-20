@@ -201,6 +201,7 @@ fun WaveSettingsBottomSheet(
     onUpdateSettings: (WaveSettings) -> Unit,
     onLaunchWave: (WaveSettings) -> Unit,
     onReset: () -> Unit,
+    onOpenTasteSetup: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -227,7 +228,48 @@ fun WaveSettingsBottomSheet(
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Surface(
+                onClick = {
+                    onDismiss()
+                    onOpenTasteSetup()
+                },
+                shape = RoundedCornerShape(16.dp),
+                color = SlantViolet.copy(alpha = 0.22f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SlantCyan.copy(alpha = 0.45f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("wave_sheet_open_taste_dna_btn")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Предварительная настройка вкусов (ДНК)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = SlantCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Выбрать любимых авторов, жанры, эпохи и баланс рекомендаций",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.78f)
+                        )
+                    }
+                    Text(
+                        text = "Открыть →",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFFACC15),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             // 1. ПОД ЗАНЯТИЕ
             Text(

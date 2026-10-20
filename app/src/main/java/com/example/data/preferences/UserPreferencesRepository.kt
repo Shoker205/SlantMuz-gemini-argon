@@ -13,6 +13,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.domain.DspState
 import com.example.domain.EqualizerPreset
 import com.example.domain.SourceProvider
+import com.example.domain.TasteDiscoveryBalance
+import com.example.domain.TasteEraOption
+import com.example.domain.UserTasteProfile
+import com.example.domain.WaveLanguage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -25,7 +29,9 @@ data class AppUserSettings(
     val useDynamicColor: Boolean = false,
     val enabledProviders: Set<SourceProvider> = SourceProvider.entries.toSet(),
     val dspState: DspState = DspState(),
-    val maxCacheSizeMb: Int = 512
+    val maxCacheSizeMb: Int = 512,
+    val tasteProfile: UserTasteProfile = UserTasteProfile(),
+    val dislikedTrackIds: Set<String> = emptySet()
 )
 
 class UserPreferencesRepository(private val context: Context) {
@@ -41,6 +47,18 @@ class UserPreferencesRepository(private val context: Context) {
         val DSP_VIRTUALIZER = intPreferencesKey("dsp_virtualizer")
         val DSP_LOUDNESS = floatPreferencesKey("dsp_loudness")
         val MAX_CACHE_MB = intPreferencesKey("max_cache_mb")
+
+        // User Taste DNA & Pre-Configuration Keys
+        val TASTE_ONBOARDING_DONE = booleanPreferencesKey("taste_onboarding_done")
+        val TASTE_GENRES = stringSetPreferencesKey("taste_genres")
+        val TASTE_ARTISTS = stringSetPreferencesKey("taste_artists")
+        val TASTE_LIKED_ALBUMS = stringSetPreferencesKey("taste_liked_albums")
+        val TASTE_LANGUAGES = stringSetPreferencesKey("taste_languages")
+        val TASTE_ERAS = stringSetPreferencesKey("taste_eras")
+        val TASTE_DISCOVERY_BALANCE = stringPreferencesKey("taste_discovery_balance")
+        val TASTE_PREFER_FULL_TRACKS = booleanPreferencesKey("taste_prefer_full_tracks")
+        val TASTE_AUTO_ADAPT_COLLECTION = booleanPreferencesKey("taste_auto_adapt_collection")
+        val DISLIKED_TRACK_IDS = stringSetPreferencesKey("disliked_track_ids")
     }
 
     val settingsFlow: Flow<AppUserSettings> = context.slantDataStore.data.map { prefs ->
@@ -75,12 +93,36 @@ class UserPreferencesRepository(private val context: Context) {
             loudnessGainDb = prefs[Keys.DSP_LOUDNESS] ?: preset.loudnessGainDb
         )
 
+        val preferredLanguages = prefs[Keys.TASTE_LANGUAGES].orEmpty().mapNotNull { name ->
+            runCatching { WaveLanguage.valueOf(name) }.getOrNull()
+        }.toSet()
+
+        val preferredEras = prefs[Keys.TASTE_ERAS].orEmpty().mapNotNull { id ->
+            TasteEraOption.fromId(id)
+        }.toSet()
+
+        val discoveryBalance = TasteDiscoveryBalance.fromId(prefs[Keys.TASTE_DISCOVERY_BALANCE])
+
+        val tasteProfile = UserTasteProfile(
+            isOnboardingCompleted = prefs[Keys.TASTE_ONBOARDING_DONE] ?: false,
+            selectedGenreIds = prefs[Keys.TASTE_GENRES].orEmpty(),
+            selectedArtists = prefs[Keys.TASTE_ARTISTS].orEmpty(),
+            likedAlbums = prefs[Keys.TASTE_LIKED_ALBUMS].orEmpty(),
+            preferredLanguages = preferredLanguages,
+            preferredEras = preferredEras,
+            discoveryBalance = discoveryBalance,
+            preferFullLengthTracks = prefs[Keys.TASTE_PREFER_FULL_TRACKS] ?: true,
+            autoAdaptFromCollection = prefs[Keys.TASTE_AUTO_ADAPT_COLLECTION] ?: true
+        )
+
         AppUserSettings(
             darkThemeMode = darkTheme,
             useDynamicColor = dynamicColor,
             enabledProviders = enabledProviders,
             dspState = dspState,
-            maxCacheSizeMb = prefs[Keys.MAX_CACHE_MB] ?: 512
+            maxCacheSizeMb = prefs[Keys.MAX_CACHE_MB] ?: 512,
+            tasteProfile = tasteProfile,
+            dislikedTrackIds = prefs[Keys.DISLIKED_TRACK_IDS].orEmpty()
         )
     }
 
@@ -119,6 +161,61 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun setMaxCacheSizeMb(sizeMb: Int) {
         context.slantDataStore.edit { prefs ->
             prefs[Keys.MAX_CACHE_MB] = sizeMb.coerceIn(64, 4096)
+        }
+    }
+
+    suspend fun saveTasteProfile(profile: UserTasteProfile) {
+        context.slantDataStore.edit { prefs ->
+            prefs[Keys.TASTE_ONBOARDING_DONE] = profile.isOnboardingCompleted
+            prefs[Keys.TASTE_GENRES] = profile.selectedGenreIds
+            prefs[Keys.TASTE_ARTISTS] = profile.selectedArtists
+            prefs[Keys.TASTE_LIKED_ALBUMS] = profile.likedAlbums
+            prefs[Keys.TASTE_LANGUAGES] = profile.preferredLanguages.map { it.name }.toSet()
+            prefs[Keys.TASTE_ERAS] = profile.preferredEras.map { it.id }.toSet()
+            prefs[Keys.TASTE_DISCOVERY_BALANCE] = profile.discoveryBalance.id
+            prefs[Keys.TASTE_PREFER_FULL_TRACKS] = profile.preferFullLengthTracks
+            prefs[Keys.TASTE_AUTO_ADAPT_COLLECTION] = profile.autoAdaptFromCollection
+        }
+    }
+
+    suspend fun toggleLikedArtist(artistName: String): Set<String> {
+        var resultSet = emptySet<String>()
+        context.slantDataStore.edit { prefs ->
+            val clean = artistName.trim()
+            val current = prefs[Keys.TASTE_ARTISTS].orEmpty()
+            val existingMatch = current.firstOrNull { it.equals(clean, ignoreCase = true) }
+            val updated = if (existingMatch != null) {
+                current - existingMatch
+            } else {
+                current + clean
+            }
+            prefs[Keys.TASTE_ARTISTS] = updated
+            resultSet = updated
+        }
+        return resultSet
+    }
+
+    suspend fun toggleLikedAlbum(albumKey: String): Set<String> {
+        var resultSet = emptySet<String>()
+        context.slantDataStore.edit { prefs ->
+            val clean = albumKey.trim()
+            val current = prefs[Keys.TASTE_LIKED_ALBUMS].orEmpty()
+            val existingMatch = current.firstOrNull { it.equals(clean, ignoreCase = true) }
+            val updated = if (existingMatch != null) {
+                current - existingMatch
+            } else {
+                current + clean
+            }
+            prefs[Keys.TASTE_LIKED_ALBUMS] = updated
+            resultSet = updated
+        }
+        return resultSet
+    }
+
+    suspend fun addDislikedTrackId(trackId: String) {
+        context.slantDataStore.edit { prefs ->
+            val current = prefs[Keys.DISLIKED_TRACK_IDS].orEmpty()
+            prefs[Keys.DISLIKED_TRACK_IDS] = current + trackId
         }
     }
 }

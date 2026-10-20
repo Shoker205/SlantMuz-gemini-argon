@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AddToHomeScreen
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Equalizer
@@ -95,6 +96,7 @@ fun DeveloperSettingsScreen(
     resetTrigger: Int = 0,
     onOpenSubCategory: (SettingsSubCategory) -> Unit = {},
     onOpenEqualizer: () -> Unit = {},
+    onOpenTasteSetup: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -131,6 +133,24 @@ fun DeveloperSettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        // GROUP 0: МУЗЫКАЛЬНЫЙ ДНК И ПЕРСОНАЛИЗАЦИЯ
+        item {
+            SettingsGroupHeader(title = "Персонализация и алгоритмы")
+        }
+
+        item {
+            val genresCount = userSettings.tasteProfile.selectedGenreIds.size
+            val artistsCount = userSettings.tasteProfile.selectedArtists.size
+            SettingsCategoryCard(
+                category = SettingsSubCategory.TASTE_DNA,
+                statusBadge = "Жанров: $genresCount • Авторов: $artistsCount • ${userSettings.tasteProfile.discoveryBalance.title}",
+                icon = Icons.Default.AutoAwesome,
+                tintColor = SlantCyan,
+                onClick = { onOpenSubCategory(SettingsSubCategory.TASTE_DNA) },
+                testTag = "settings_cat_taste_dna"
             )
         }
 
@@ -260,6 +280,7 @@ fun SettingsSubCategoryScreen(
     onClearAllCaches: () -> Unit,
     onSyncRemoteConfig: () -> Unit,
     onOverrideBitrate: (Int) -> Unit,
+    onOpenTasteSetup: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -318,6 +339,50 @@ fun SettingsSubCategoryScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when (subCategory) {
+                SettingsSubCategory.TASTE_DNA -> {
+                    item {
+                        LiquidGlassCard(
+                            cornerRadius = 22.dp,
+                            tintColor = SlantCyan,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = "Музыкальный ДНК и предварительная настройка",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Выбранные жанры: ${userSettings.tasteProfile.selectedGenres.joinToString(", ") { it.title }.ifBlank { "Авто-определение по коллекции" }}\n" +
+                                        "Выбранные авторы: ${userSettings.tasteProfile.selectedArtists.joinToString(", ").ifBlank { "Из ваших лайков и плейлистов" }}\n" +
+                                        "Любимых альбомов: ${userSettings.tasteProfile.likedAlbums.size}\n" +
+                                        "Режим рекомендаций: ${userSettings.tasteProfile.discoveryBalance.title}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = onOpenTasteSetup,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_open_taste_wizard_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Открыть мастер настройки вкусов и ДНК")
+                                }
+                            }
+                        }
+                    }
+                }
+
                 SettingsSubCategory.AUDIO_DSP -> {
                     item {
                         LiquidGlassCard(
