@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root_medium"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_widget_liquid_glass"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_medium_provider"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SLANTMUZ • LIQUID GLASS 4×2"
+                android:textColor="#FFA8E6CF"
+                android:textSize="10sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_medium_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Выберите трек в SlantMuz"
+                android:textColor="#FFF8FAFC"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_medium_artist"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="Мульти-источниковый аудиоплеер"
+                android:textColor="#FFCBD5E1"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/widget_medium_prev_btn"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/app_name"
+            android:src="@android:drawable/ic_media_previous"
+            android:tint="#FFF8FAFC" />
+
+        <ImageButton
+            android:id="@+id/widget_medium_play_btn"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_widget_pill_button"
+            android:contentDescription="@string/app_name"
+            android:src="@android:drawable/ic_media_play"
+            android:tint="#FF102A22" />
+
+        <ImageButton
+            android:id="@+id/widget_medium_next_btn"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="@android:color/transparent"
+            android:contentDescription="@string/app_name"
+            android:src="@android:drawable/ic_media_next"
+            android:tint="#FFF8FAFC" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/widget_medium_progress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_marginTop="8dp"
+        android:max="100"
+        android:progress="35"
+        android:progressTint="#FFA8E6CF" />
+</LinearLayout>

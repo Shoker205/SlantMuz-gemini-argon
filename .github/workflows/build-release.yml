@@ -1,0 +1,130 @@
+name: Build SlantMuz APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      create_github_release:
+        description: 'Опубликовать GitHub Release с APK'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Тег релиза (например, v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Assemble Signed Release & Debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare .env file
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Prepare Keystores (Secrets or Auto-Generated Fallback)
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          SECRET_STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          # 1. Ensure debug.keystore exists for debug builds
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # 2. Prepare release keystore (use GitHub Secret if configured, otherwise generate a self-signed release key)
+          STORE_PASS="${SECRET_STORE_PASSWORD:-slantmuz_release_pass}"
+          KEY_PASS="${SECRET_KEY_PASSWORD:-$STORE_PASS}"
+
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "$RELEASE_KEYSTORE_BASE64" | base64 --decode > my-upload-key.jks
+          else
+            keytool -genkeypair -v \
+              -keystore my-upload-key.jks \
+              -storepass "$STORE_PASS" \
+              -alias upload \
+              -keypass "$KEY_PASS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=SlantMuz,OU=SlantTech,O=SlantTech,L=Global,S=Global,C=US"
+          fi
+
+          echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
+          echo "STORE_PASSWORD=$STORE_PASS" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=$KEY_PASS" >> "$GITHUB_ENV"
+
+      - name: Build Release & Debug APKs
+        run: |
+          gradle assembleRelease assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare APK Artifacts
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/*.apk dist/SlantMuz-release.apk
+          cp app/build/outputs/apk/debug/*.apk dist/SlantMuz-debug.apk
+          ls -lh dist/
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SlantMuz-Release-APK
+          path: dist/SlantMuz-release.apk
+          if-no-files-found: error
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SlantMuz-Debug-APK
+          path: dist/SlantMuz-debug.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on Tag or Manual Trigger)
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_github_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}
+          name: "SlantMuz ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag }}"
+          generate_release_notes: true
+          files: |
+            dist/SlantMuz-release.apk
+            dist/SlantMuz-debug.apk

@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">SlantMuz</string>
+    <string name="brand_subtitle">by SlantTech • Pastel Liquid Glass Audio Hub</string>
+    <string name="nav_explore">Обзор</string>
+    <string name="nav_search">Поиск</string>
+    <string name="nav_player">Плеер</string>
+    <string name="nav_library">Медиатека</string>
+    <string name="nav_settings">Хаб &amp; Виджеты</string>
+    <string name="search_placeholder">Треки, артисты, радио, живые концерты…</string>
+    <string name="lyrics_title">Синхронизированный текст (LRCLIB)</string>
+    <string name="equalizer_title">5-полосный DSP Эквалайзер &amp; Эффекты</string>
+    <string name="sleep_timer_title">Таймер сна</string>
+    <string name="sources_hub_title">Монитор провайдеров (Multi-Source Hub)</string>
+    <string name="offline_cache_title">Оффлайн-кэш аудио (Room + SimpleCache)</string>
+    <string name="notification_channel_name">Воспроизведение SlantMuz</string>
+    <string name="notification_channel_desc">Умное фоновое уведомление проигрывания с быстрыми кнопками управления и избранного</string>
+    <string name="widget_small_desc">SlantMuz 2×1 Компактная капсула (Play/Pause, Следующий трек)</string>
+    <string name="widget_medium_desc">SlantMuz 4×2 Пастельный Liquid Glass плеер с прогресс-баром</string>
+    <string name="widget_large_desc">SlantMuz 4×3 Студийная дека с синхронным текстом LRCLIB и очередью</string>
+</resources>

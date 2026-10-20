@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root_small"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_widget_liquid_glass"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widget_small_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SLANTMUZ • PASTEL"
+            android:textColor="#FFA8E6CF"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_small_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Поток дня"
+            android:textColor="#FFF8FAFC"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_small_artist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="SlantMuz Audio"
+            android:textColor="#FFCBD5E1"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/widget_small_play_btn"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:layout_marginStart="6dp"
+        android:background="@drawable/bg_widget_pill_button"
+        android:contentDescription="@string/app_name"
+        android:src="@android:drawable/ic_media_play"
+        android:tint="#FF102A22" />
+
+    <ImageButton
+        android:id="@+id/widget_small_next_btn"
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:layout_marginStart="4dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/app_name"
+        android:src="@android:drawable/ic_media_next"
+        android:tint="#FFF8FAFC" />
+</LinearLayout>

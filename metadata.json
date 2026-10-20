@@ -1,0 +1,6 @@
+{
+  "name": "SlantMuz",
+  "description": "SlantMuz by SlantTech — multi-source audiophile music streaming hub and local audio player with synchronized karaoke lyrics, 5-band DSP equalizer, and intelligent track deduplication.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
