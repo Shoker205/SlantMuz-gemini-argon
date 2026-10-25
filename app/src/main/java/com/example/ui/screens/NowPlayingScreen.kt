@@ -203,8 +203,7 @@ fun NowPlayingScreen(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(60.dp)
-                    .alpha(0.36f)
+                    .alpha(0.18f)
             )
         }
 
@@ -214,8 +213,8 @@ fun NowPlayingScreen(
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            Color(0xFF0E1D1C).copy(alpha = 0.72f),
-                            Color(0xFF0B1616).copy(alpha = 0.90f),
+                            Color(0xFF0E1D1C).copy(alpha = 0.84f),
+                            Color(0xFF0B1616).copy(alpha = 0.94f),
                             SlantObsidian
                         )
                     )
@@ -946,6 +945,102 @@ fun NowPlayingScreen(
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis
                         )
+                    }
+                }
+            }
+
+            // 10. Live MediaSession Notification Preview & Quick Actions Panel
+            Spacer(modifier = Modifier.height(18.dp))
+            Surface(
+                color = Color.White.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("player_notification_preview_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Системное медиа-уведомление • Media3",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = SlantCyan,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${track.primaryProvider.shortBadge} • FULL 320kbps • Шторка и экран блокировки",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.7f)
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = SlantEmerald.copy(alpha = 0.18f)
+                        ) {
+                            Text(
+                                text = "ACTIVE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SlantEmerald,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { onToggleFavorite(track) }) {
+                            Icon(
+                                imageVector = if (track.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Лайк в уведомлении",
+                                tint = if (track.isFavorite) SlantMagenta else Color.White
+                            )
+                        }
+                        IconButton(onClick = onSkipPrevious) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Предыдущий",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = onPlayPause) {
+                            Icon(
+                                imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                tint = SlantCyan
+                            )
+                        }
+                        IconButton(onClick = onSkipNext) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Следующий",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = onToggleShuffle) {
+                            Icon(
+                                imageVector = Icons.Default.Shuffle,
+                                contentDescription = "Перемешать",
+                                tint = if (playbackState.shuffleEnabled) SlantCyan else Color.White.copy(alpha = 0.7f)
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = { onStartTrackWave(track) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("Волна ДНК", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }

@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "UserAccountDocument": {
+      "title": "UserAccountDocument",
+      "description": "Cloud profile and Musical DNA preferences for an authenticated SlantMuz user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Immutable Firebase Auth UID of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name or nickname."
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "User avatar photo URL."
+        },
+        "selectedGenreIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Selected primary genre IDs in Musical DNA."
+        },
+        "selectedSubgenreIds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Selected granular subgenre IDs in Musical DNA."
+        },
+        "selectedArtists": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Liked and preferred artists."
+        },
+        "likedAlbums": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Liked album keys (Artist|Album)."
+        },
+        "preferredLanguages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Preferred vocal language codes."
+        },
+        "preferredEras": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Preferred release era IDs."
+        },
+        "discoveryBalance": {
+          "type": "string",
+          "description": "Algorithmic orientation mode."
+        },
+        "preferFullLengthTracks": {
+          "type": "boolean",
+          "description": "Whether to strictly exclude 30s previews."
+        },
+        "autoAdaptFromCollection": {
+          "type": "boolean",
+          "description": "Whether recommendations adapt automatically to liked tracks and playlists."
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Epoch milliseconds of last cloud sync."
+        }
+      },
+      "required": ["uid", "displayName", "updatedAt"]
+    },
+    "CloudTrackDocument": {
+      "title": "CloudTrackDocument",
+      "description": "A liked track stored in the user's cloud collection.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "trackId": {
+          "type": "string",
+          "description": "Canonical track identifier."
+        },
+        "title": {
+          "type": "string",
+          "description": "Track title."
+        },
+        "artist": {
+          "type": "string",
+          "description": "Track artist."
+        },
+        "album": {
+          "type": "string",
+          "description": "Album title."
+        },
+        "artworkUrl": {
+          "type": "string",
+          "description": "Cover artwork URL."
+        },
+        "streamUrl": {
+          "type": "string",
+          "description": "Direct full-length audio stream URL."
+        },
+        "durationSec": {
+          "type": "integer",
+          "description": "Track duration in seconds."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Source provider name."
+        },
+        "genre": {
+          "type": "string",
+          "description": "Track genre."
+        },
+        "releaseYear": {
+          "type": "string",
+          "description": "Track release year."
+        },
+        "savedAt": {
+          "type": "integer",
+          "description": "Epoch milliseconds when track was liked."
+        }
+      },
+      "required": ["uid", "trackId", "title", "artist", "streamUrl", "savedAt"]
+    },
+    "CloudPlaylistDocument": {
+      "title": "CloudPlaylistDocument",
+      "description": "A custom user playlist synced to Firestore.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID."
+        },
+        "playlistKey": {
+          "type": "string",
+          "description": "Unique playlist key."
+        },
+        "name": {
+          "type": "string",
+          "description": "Playlist title."
+        },
+        "description": {
+          "type": "string",
+          "description": "Playlist description."
+        },
+        "tracksJson": {
+          "type": "string",
+          "description": "Serialized JSON array of tracks in the playlist."
+        },
+        "updatedAt": {
+          "type": "integer",
+          "description": "Last updated timestamp."
+        }
+      },
+      "required": ["uid", "playlistKey", "name", "tracksJson", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccountDocument" },
+      "description": "Per-user account profile and Musical DNA settings."
+    },
+    "/users/{userId}/likedTracks/{trackId}": {
+      "schema": { "$ref": "#/entities/CloudTrackDocument" },
+      "description": "Per-user liked tracks collection."
+    },
+    "/users/{userId}/playlists/{playlistKey}": {
+      "schema": { "$ref": "#/entities/CloudPlaylistDocument" },
+      "description": "Per-user synced custom playlists."
+    }
+  }
+}

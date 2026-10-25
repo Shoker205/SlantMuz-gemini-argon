@@ -96,6 +96,7 @@ fun ExploreScreen(
     waveSettings: WaveSettings = WaveSettings(),
     tasteProfile: UserTasteProfile = UserTasteProfile(),
     tasteDnaSummary: UserTasteDnaSummary = UserTasteDnaSummary(),
+    cloudAccountState: com.example.domain.CloudAccountState = com.example.domain.CloudAccountState(),
     isWaveGenerating: Boolean = false,
     waveQueueTracks: List<Track> = emptyList(),
     resetTrigger: Int = 0,
@@ -109,6 +110,7 @@ fun ExploreScreen(
     onOpenTrackMenu: (Track) -> Unit = {},
     onOpenWaveSettings: () -> Unit = {},
     onOpenTasteSetup: () -> Unit = {},
+    onOpenAccountAuth: () -> Unit = {},
     onOpenArtist: (String) -> Unit = {},
     onStartMyWave: () -> Unit = {},
     onResetWaveSettings: () -> Unit = {},
@@ -203,11 +205,37 @@ fun ExploreScreen(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 val eqPreset = SlantWaveEngine.recommendedEqualizerPreset(waveSettings, tasteProfile)
-                                Text(
-                                    text = "ДНК-ориентация: ${tasteDnaSummary.personalizationPercent}% • DSP: ${eqPreset.displayName}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "ДНК: ${tasteDnaSummary.personalizationPercent}% • FULL 320kbps • ${eqPreset.displayName}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    Surface(
+                                        onClick = onOpenAccountAuth,
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = (if (cloudAccountState.isSignedIn) SlantEmerald else SlantCyan).copy(alpha = 0.18f),
+                                        modifier = Modifier.testTag("explore_account_chip")
+                                    ) {
+                                        Text(
+                                            text = if (cloudAccountState.isSignedIn) {
+                                                "☁ ${cloudAccountState.displayName.take(12).ifBlank { "Аккаунт" }}"
+                                            } else {
+                                                "☁ Войти в аккаунт"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (cloudAccountState.isSignedIn) SlantEmerald else SlantCyan,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
                             }
 
                             Spacer(modifier = Modifier.width(12.dp))

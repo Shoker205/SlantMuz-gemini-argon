@@ -17,9 +17,11 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.example.domain.SourceProvider
 import com.example.domain.StreamCandidate
 import com.example.domain.Track
+import com.example.domain.isPreviewSnippetUrl
 import com.example.service.MediaPlaybackService
 import com.example.widget.SlantMuzWidgetUpdater
 import java.io.File
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class RepeatModeState {
     OFF, ALL, ONE
@@ -53,12 +56,12 @@ data class PlaybackUiState(
 /**
  * Central ExoPlayer & MediaSession coordinator with low-latency LoadControl (550ms start buffer),
  * background queue stream pre-resolution, automatic multi-provider stream failover,
- * real-time 100ms progress updates, Home Screen AppWidget synchronization, Sleep Timer, and DSP binding.
+ * throttled 250ms progress updates, Home Screen AppWidget synchronization, Sleep Timer, and DSP binding.
  */
 @OptIn(UnstableApi::class)
 class PlayerController private constructor(private val context: Context) {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val audioEffectsManager = AudioEffectsManager()
 
     private var exoPlayer: ExoPlayer? = null
@@ -70,6 +73,8 @@ class PlayerController private constructor(private val context: Context) {
     private var streamResolver: (suspend (SourceProvider, String, Track) -> String)? = null
     private var prefetchCallback: (suspend (Track) -> Unit)? = null
     private var onTrackPlayedCallback: (suspend (Track) -> Unit)? = null
+    private var onToggleFavoriteCallback: ((Track) -> Unit)? = null
+    private var onStartWaveCallback: (() -> Unit)? = null
 
     private var candidateIndexForCurrentTrack: Int = 0
 
@@ -79,11 +84,35 @@ class PlayerController private constructor(private val context: Context) {
     fun attachResolvers(
         resolver: suspend (SourceProvider, String, Track) -> String,
         prefetcher: suspend (Track) -> Unit = {},
-        onTrackPlayed: suspend (Track) -> Unit
+        onTrackPlayed: suspend (Track) -> Unit,
+        onToggleFavorite: ((Track) -> Unit)? = null,
+        onStartWave: (() -> Unit)? = null
     ) {
         this.streamResolver = resolver
         this.prefetchCallback = prefetcher
         this.onTrackPlayedCallback = onTrackPlayed
+        this.onToggleFavoriteCallback = onToggleFavorite
+        this.onStartWaveCallback = onStartWave
+    }
+
+    fun triggerFavoriteFromExternal() {
+        val cur = _playbackState.value.currentTrack ?: return
+        val callback = onToggleFavoriteCallback
+        if (callback != null) {
+            callback.invoke(cur)
+        } else {
+            updateCurrentTrackFavoriteState(!cur.isFavorite)
+        }
+    }
+
+    fun triggerWaveFromExternal() {
+        val callback = onStartWaveCallback
+        if (callback != null) {
+            callback.invoke()
+        } else {
+            toggleShuffle()
+            skipNext()
+        }
     }
 
     fun getOrCreateExoPlayer(): ExoPlayer {
@@ -231,19 +260,26 @@ class PlayerController private constructor(private val context: Context) {
                 isBuffering = true
             )
 
-            val resolvedUrl = runCatching {
-                if (candidate.streamUrl.startsWith("/")) {
-                    Uri.fromFile(File(candidate.streamUrl)).toString()
-                } else {
-                    streamResolver?.invoke(candidate.provider, candidate.streamUrl, track)
-                        ?: candidate.streamUrl
-                }
-            }.getOrDefault("")
+            val resolvedUrl = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (candidate.streamUrl.startsWith("/")) {
+                        Uri.fromFile(File(candidate.streamUrl)).toString()
+                    } else {
+                        val targetUrl = if (isPreviewSnippetUrl(candidate.streamUrl)) {
+                            "fulltrack://${track.artist.trim()}|${track.title.trim()}|${track.durationSec.coerceAtLeast(180)}"
+                        } else {
+                            candidate.streamUrl
+                        }
+                        streamResolver?.invoke(candidate.provider, targetUrl, track)
+                            ?: targetUrl
+                    }
+                }.getOrDefault("")
+            }
 
             if (!isActive) return@launch
 
-            if (!isPlayableUriScheme(resolvedUrl)) {
-                attemptStreamFailover("Протокол потока недоступен, поиск альтернативного зеркала…")
+            if (!isPlayableUriScheme(resolvedUrl) || isPreviewSnippetUrl(resolvedUrl)) {
+                attemptStreamFailover("Полноразмерный поток не найден, переключение зеркала…")
                 return@launch
             }
 
@@ -251,14 +287,14 @@ class PlayerController private constructor(private val context: Context) {
             val albumDisplay = buildString {
                 if (track.album.isNotBlank()) append(track.album)
                 else append(candidate.provider.displayName)
-                append(" • ${candidate.bitrateKbps}kbps")
+                append(" • ${candidate.bitrateKbps}kbps • Full Audio")
             }
 
             val metadata = MediaMetadata.Builder()
                 .setTitle(track.title)
                 .setArtist(track.artist)
                 .setAlbumTitle(albumDisplay)
-                .setSubtitle("${candidate.provider.shortBadge} • ${track.artist}")
+                .setSubtitle("${candidate.provider.shortBadge} • ${track.artist} • FULL HD")
                 .setArtworkUri(
                     if (track.artworkUrl.isNotBlank()) Uri.parse(track.artworkUrl) else null
                 )
@@ -445,16 +481,19 @@ class PlayerController private constructor(private val context: Context) {
                     val pos = player.currentPosition.coerceAtLeast(0L)
                     val dur = player.duration.takeIf { it > 0L }
                         ?: _playbackState.value.durationMs
-                    _playbackState.value = _playbackState.value.copy(
-                        positionMs = pos,
-                        durationMs = dur
-                    )
+                    val currentState = _playbackState.value
+                    if (abs(pos - currentState.positionMs) >= 200L || dur != currentState.durationMs) {
+                        _playbackState.value = currentState.copy(
+                            positionMs = pos,
+                            durationMs = dur
+                        )
+                    }
                     tickCount++
-                    if (tickCount % 20 == 0) {
+                    if (tickCount % 8 == 0) {
                         SlantMuzWidgetUpdater.updateAllWidgets(context, _playbackState.value)
                     }
                 }
-                delay(100L)
+                delay(250L)
             }
         }
     }

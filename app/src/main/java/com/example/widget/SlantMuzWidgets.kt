@@ -40,6 +40,7 @@ object SlantMuzWidgetUpdater {
     const val ACTION_NEXT = "com.example.widget.ACTION_NEXT"
     const val ACTION_PREV = "com.example.widget.ACTION_PREV"
     const val ACTION_FAVORITE = "com.example.widget.ACTION_FAVORITE"
+    const val ACTION_START_WAVE = "com.example.widget.ACTION_START_WAVE"
 
     fun handleWidgetAction(context: Context, action: String?) {
         if (action == null) return
@@ -48,12 +49,8 @@ object SlantMuzWidgetUpdater {
             ACTION_PLAY_PAUSE -> controller.togglePlayPause()
             ACTION_NEXT -> controller.skipNext()
             ACTION_PREV -> controller.skipPrevious()
-            ACTION_FAVORITE -> {
-                val cur = controller.playbackState.value.currentTrack
-                if (cur != null) {
-                    controller.updateCurrentTrackFavoriteState(!cur.isFavorite)
-                }
-            }
+            ACTION_FAVORITE -> controller.triggerFavoriteFromExternal()
+            ACTION_START_WAVE -> controller.triggerWaveFromExternal()
         }
         updateAllWidgets(context.applicationContext, controller.playbackState.value)
     }

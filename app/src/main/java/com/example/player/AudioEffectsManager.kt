@@ -31,6 +31,7 @@ class AudioEffectsManager {
     private val _dspState = MutableStateFlow(DspState())
     val dspState: StateFlow<DspState> = _dspState.asStateFlow()
 
+    @Synchronized
     fun onAudioSessionIdChanged(audioSessionId: Int) {
         if (audioSessionId <= 0 || audioSessionId == currentSessionId) return
         releaseEffects()
@@ -39,7 +40,7 @@ class AudioEffectsManager {
         var hwAttached = false
         val detectedFreqs = mutableListOf<Int>()
 
-        runCatching {
+        try {
             val eq = Equalizer(0, audioSessionId)
             val bandsCount = eq.numberOfBands.toInt()
             for (b in 0 until minOf(bandsCount, 5)) {
@@ -48,18 +49,22 @@ class AudioEffectsManager {
             }
             equalizer = eq
             hwAttached = true
+        } catch (_: Throwable) {
         }
 
-        runCatching {
+        try {
             bassBoost = BassBoost(0, audioSessionId)
+        } catch (_: Throwable) {
         }
 
-        runCatching {
+        try {
             virtualizer = Virtualizer(0, audioSessionId)
+        } catch (_: Throwable) {
         }
 
-        runCatching {
+        try {
             loudnessEnhancer = LoudnessEnhancer(audioSessionId)
+        } catch (_: Throwable) {
         }
 
         val updatedFreqs = if (detectedFreqs.size == 5) {
@@ -123,57 +128,71 @@ class AudioEffectsManager {
         applyDspState(_dspState.value.copy(enabled = enabled))
     }
 
+    @Synchronized
     private fun applyCurrentStateToHardware() {
         val state = _dspState.value
 
-        runCatching {
-            val eq = equalizer ?: return@runCatching
-            eq.enabled = state.enabled
-            if (state.enabled) {
-                val range = eq.bandLevelRange
-                val minMb = range.getOrElse(0) { -1500 }.toInt()
-                val maxMb = range.getOrElse(1) { 1500 }.toInt()
-                val numBands = minOf(eq.numberOfBands.toInt(), state.bandGainsDb.size)
-                for (i in 0 until numBands) {
-                    val targetMb = (state.bandGainsDb[i] * 100f).toInt().coerceIn(minMb, maxMb)
-                    eq.setBandLevel(i.toShort(), targetMb.toShort())
+        try {
+            val eq = equalizer
+            if (eq != null) {
+                eq.enabled = state.enabled
+                if (state.enabled) {
+                    val range = eq.bandLevelRange
+                    val minMb = range.getOrElse(0) { -1500 }.toInt()
+                    val maxMb = range.getOrElse(1) { 1500 }.toInt()
+                    val numBands = minOf(eq.numberOfBands.toInt(), state.bandGainsDb.size)
+                    for (i in 0 until numBands) {
+                        val targetMb = (state.bandGainsDb[i] * 100f).toInt().coerceIn(minMb, maxMb)
+                        eq.setBandLevel(i.toShort(), targetMb.toShort())
+                    }
                 }
             }
+        } catch (_: Throwable) {
         }
 
-        runCatching {
-            val bb = bassBoost ?: return@runCatching
-            bb.enabled = state.enabled && state.bassBoostPercent > 0
-            if (bb.strengthSupported && state.enabled) {
-                val strength = (state.bassBoostPercent * 10).coerceIn(0, 1000).toShort()
-                bb.setStrength(strength)
+        try {
+            val bb = bassBoost
+            if (bb != null) {
+                bb.enabled = state.enabled && state.bassBoostPercent > 0
+                if (bb.strengthSupported && state.enabled) {
+                    val strength = (state.bassBoostPercent * 10).coerceIn(0, 1000).toShort()
+                    bb.setStrength(strength)
+                }
             }
+        } catch (_: Throwable) {
         }
 
-        runCatching {
-            val virt = virtualizer ?: return@runCatching
-            virt.enabled = state.enabled && state.virtualizerPercent > 0
-            if (virt.strengthSupported && state.enabled) {
-                val strength = (state.virtualizerPercent * 10).coerceIn(0, 1000).toShort()
-                virt.setStrength(strength)
+        try {
+            val virt = virtualizer
+            if (virt != null) {
+                virt.enabled = state.enabled && state.virtualizerPercent > 0
+                if (virt.strengthSupported && state.enabled) {
+                    val strength = (state.virtualizerPercent * 10).coerceIn(0, 1000).toShort()
+                    virt.setStrength(strength)
+                }
             }
+        } catch (_: Throwable) {
         }
 
-        runCatching {
-            val loud = loudnessEnhancer ?: return@runCatching
-            loud.enabled = state.enabled && state.loudnessGainDb > 0f
-            if (state.enabled) {
-                val targetGainMb = (state.loudnessGainDb * 100f).toInt().coerceIn(0, 1000)
-                loud.setTargetGain(targetGainMb)
+        try {
+            val loud = loudnessEnhancer
+            if (loud != null) {
+                loud.enabled = state.enabled && state.loudnessGainDb > 0f
+                if (state.enabled) {
+                    val targetGainMb = (state.loudnessGainDb * 100f).toInt().coerceIn(0, 1000)
+                    loud.setTargetGain(targetGainMb)
+                }
             }
+        } catch (_: Throwable) {
         }
     }
 
+    @Synchronized
     fun releaseEffects() {
-        runCatching { equalizer?.release() }
-        runCatching { bassBoost?.release() }
-        runCatching { virtualizer?.release() }
-        runCatching { loudnessEnhancer?.release() }
+        try { equalizer?.release() } catch (_: Throwable) {}
+        try { bassBoost?.release() } catch (_: Throwable) {}
+        try { virtualizer?.release() } catch (_: Throwable) {}
+        try { loudnessEnhancer?.release() } catch (_: Throwable) {}
         equalizer = null
         bassBoost = null
         virtualizer = null

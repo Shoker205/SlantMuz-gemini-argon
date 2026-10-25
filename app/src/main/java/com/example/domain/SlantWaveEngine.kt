@@ -262,9 +262,14 @@ object SlantWaveEngine {
             albumScores[key] = (albumScores[key] ?: 0) + weight
         }
 
-        // 1. Explicit pre-configured genres (+150 weight)
+        // 1. Explicit pre-configured genres (+150 weight) and pinpoint subgenres (+180 weight)
         tasteProfile.selectedGenres.forEach { genre ->
             genreScores[genre] = (genreScores[genre] ?: 0) + 150
+        }
+        tasteProfile.selectedSubgenres.forEach { sub ->
+            TasteGenreOption.fromId(sub.parentGenreId)?.let { parentGenre ->
+                genreScores[parentGenre] = (genreScores[parentGenre] ?: 0) + 95
+            }
         }
 
         // 2. Explicit pre-configured & liked artists (+140 weight)
@@ -338,6 +343,8 @@ object SlantWaveEngine {
             }
             .take(6)
 
+        val topSubgenres = tasteProfile.selectedSubgenres.take(8)
+
         val topAlbums = albumScores.entries
             .sortedByDescending { it.value }
             .map { it.key }
@@ -373,17 +380,19 @@ object SlantWaveEngine {
             .size
 
         val totalSignals = tasteProfile.selectedGenreIds.size * 3 +
+            tasteProfile.selectedSubgenreIds.size * 4 +
             allSelectedArtistsCount * 3 +
             favoriteTracks.size * 2 +
             playlistTracks.distinctBy { it.id }.size +
             tasteProfile.likedAlbums.size * 2 +
             historyTracks.size.coerceAtMost(20)
 
-        val personalizationPercent = (32 + (totalSignals * 3)).coerceIn(34, 99)
+        val personalizationPercent = (36 + (totalSignals * 3)).coerceIn(38, 99)
 
         return UserTasteDnaSummary(
             topArtists = topArtists,
             topGenres = topGenres,
+            topSubgenres = topSubgenres,
             topAlbums = topAlbums,
             dominantLanguageLabel = dominantLanguage,
             personalizationPercent = personalizationPercent,
@@ -410,13 +419,21 @@ object SlantWaveEngine {
                 TasteGenreOption.PHONK -> "Drift Phonk"
                 TasteGenreOption.INDIE_ALT -> "Русский инди"
                 TasteGenreOption.ROCK_METAL -> "Русский рок"
+                TasteGenreOption.METAL_HEAVY_CORE -> "Alternative Metal"
                 TasteGenreOption.ELECTRONIC_CLUB -> "Melodic Techno"
+                TasteGenreOption.DNB_BREAKCORE -> "Liquid Drum and Bass"
                 TasteGenreOption.HIP_HOP_RAP -> "Русский хип-хоп"
+                TasteGenreOption.HYPERPOP_WITCH -> "Witch House Darkwave"
                 TasteGenreOption.LOFI_CHILL -> "Lofi Chillhop"
                 TasteGenreOption.POP_DISCO -> "Русский поп"
+                TasteGenreOption.RNB_CITY_POP -> "Contemporary R&B"
                 TasteGenreOption.AMBIENT_SPACE -> "Space Ambient"
                 TasteGenreOption.NEOCLASSICAL_OST -> "Neoclassical Piano"
                 TasteGenreOption.JAZZ_SOUL -> "Smooth Jazz"
+                TasteGenreOption.ANIME_KPOP_JPOP -> "Anime OST J-Rock"
+                TasteGenreOption.RUSSIAN_SCENE -> "Русский рок и инди"
+                TasteGenreOption.ACOUSTIC_FOLK_BARD -> "Акустическая гитара"
+                TasteGenreOption.REGGAE_AFRO_LATIN -> "Reggae Dub"
             }
         }
         return when (genre) {
@@ -425,13 +442,21 @@ object SlantWaveEngine {
             TasteGenreOption.PHONK -> "Drift Phonk"
             TasteGenreOption.INDIE_ALT -> "Indie Rock Dream Pop"
             TasteGenreOption.ROCK_METAL -> "Alternative Rock"
+            TasteGenreOption.METAL_HEAVY_CORE -> "Metalcore Nu Metal"
             TasteGenreOption.ELECTRONIC_CLUB -> "Melodic Techno Electronic"
+            TasteGenreOption.DNB_BREAKCORE -> "Liquid Drum and Bass"
             TasteGenreOption.HIP_HOP_RAP -> "Hip-Hop Beats"
+            TasteGenreOption.HYPERPOP_WITCH -> "Witch House Darkwave"
             TasteGenreOption.LOFI_CHILL -> "Lofi Chillhop"
             TasteGenreOption.POP_DISCO -> "Nu Disco Synth Pop"
+            TasteGenreOption.RNB_CITY_POP -> "Japanese City Pop Neo Soul"
             TasteGenreOption.AMBIENT_SPACE -> "Space Ambient"
             TasteGenreOption.NEOCLASSICAL_OST -> "Neoclassical Piano"
             TasteGenreOption.JAZZ_SOUL -> "Smooth Jazz Neo Soul"
+            TasteGenreOption.ANIME_KPOP_JPOP -> "Anime OST J-Rock"
+            TasteGenreOption.RUSSIAN_SCENE -> "Russian Post-Punk Rock"
+            TasteGenreOption.ACOUSTIC_FOLK_BARD -> "Acoustic Indie Folk"
+            TasteGenreOption.REGGAE_AFRO_LATIN -> "Reggae Dub Chill"
         }
     }
 
@@ -446,6 +471,7 @@ object SlantWaveEngine {
 
         val topArtists = dnaSummary.topArtists
         val topGenres = dnaSummary.topGenres
+        val topSubgenres = dnaSummary.topSubgenres
 
         val artistQueries = topArtists.take(4).map { it.trim() }.filter { it.isNotBlank() }
         val similarArtistQueries = (relatedArtists + topArtists.flatMap { getRelatedArtistsFor(it) })
@@ -453,12 +479,14 @@ object SlantWaveEngine {
             .filterNot { rel -> artistQueries.any { it.equals(rel, ignoreCase = true) } }
             .take(4)
 
-        val genreQueries = topGenres.take(4).map { genre ->
+        val subgenreQueries = topSubgenres.take(3).map { it.searchQuery }
+        val genreQueries = (subgenreQueries + topGenres.take(4).map { genre ->
             cleanGenreSearchTerm(genre, prefersRussian)
-        }
+        }).distinctBy { it.lowercase() }
 
         val forYouQueries = buildList {
             artistQueries.take(2).forEach { add(it) }
+            subgenreQueries.take(2).forEach { add(it) }
             similarArtistQueries.take(2).forEach { add(it) }
             genreQueries.take(2).forEach { add(it) }
             if (isEmpty()) {
@@ -482,8 +510,10 @@ object SlantWaveEngine {
             topGenres.firstOrNull() == TasteGenreOption.PHONK -> "Phonk"
             topGenres.firstOrNull() == TasteGenreOption.LOFI_CHILL -> "Lofi"
             topGenres.firstOrNull() == TasteGenreOption.JAZZ_SOUL -> "Jazz"
-            topGenres.firstOrNull() == TasteGenreOption.ROCK_METAL -> "Rock"
-            topGenres.firstOrNull() == TasteGenreOption.ELECTRONIC_CLUB -> "Techno"
+            topGenres.firstOrNull() == TasteGenreOption.ROCK_METAL ||
+                topGenres.firstOrNull() == TasteGenreOption.METAL_HEAVY_CORE -> "Rock"
+            topGenres.firstOrNull() == TasteGenreOption.ELECTRONIC_CLUB ||
+                topGenres.firstOrNull() == TasteGenreOption.DNB_BREAKCORE -> "Techno"
             else -> "Chill"
         }
 
@@ -497,7 +527,7 @@ object SlantWaveEngine {
 
     /**
      * Builds 5-6 focused, high-precision search queries for "Моя волна" combining WaveSettings,
-     * UserTasteProfile, Collection DNA, and the Artist Similarity Graph.
+     * UserTasteProfile (including pinpoint subgenres), Collection DNA, and the Artist Similarity Graph.
      */
     fun buildTargetedWaveQueries(
         settings: WaveSettings,
@@ -518,6 +548,17 @@ object SlantWaveEngine {
         val queries = mutableListOf<String>()
         val topUserArtists = dna.topArtists
         val topUserGenres = dna.topGenres
+        val topUserSubgenres = dna.topSubgenres
+
+        // Custom seed subgenre or genre if set in WaveSettings
+        settings.customSeedSubgenreId?.let { subId ->
+            TasteSubgenreOption.fromId(subId)?.let { queries.add(it.searchQuery) }
+        }
+        settings.customSeedGenreId?.let { genId ->
+            TasteGenreOption.fromId(genId)?.let { queries.add(cleanGenreSearchTerm(it, false)) }
+        }
+        settings.customSeedArtist?.takeIf { it.isNotBlank() }?.let { queries.add(it) }
+
         val relatedArtists = topUserArtists.flatMap { getRelatedArtistsFor(it) }
             .distinctBy { it.lowercase() }
             .filterNot { rel -> topUserArtists.any { it.equals(rel, ignoreCase = true) } }
@@ -539,18 +580,22 @@ object SlantWaveEngine {
             }
             WaveCharacter.UNFAMILIAR -> {
                 filterByLang(relatedArtists).take(3).forEach { queries.add(it) }
+                topUserSubgenres.take(2).forEach { queries.add(it.searchQuery) }
             }
             else -> {
                 when (tasteProfile.discoveryBalance) {
                     TasteDiscoveryBalance.FAVORITE_FOCUSED -> {
                         filterByLang(topUserArtists).take(3).forEach { queries.add(it) }
+                        topUserSubgenres.take(1).forEach { queries.add(it.searchQuery) }
                         filterByLang(relatedArtists).take(1).forEach { queries.add(it) }
                     }
                     TasteDiscoveryBalance.BALANCED -> {
                         filterByLang(topUserArtists).take(2).forEach { queries.add(it) }
+                        topUserSubgenres.take(2).forEach { queries.add(it.searchQuery) }
                         filterByLang(relatedArtists).take(2).forEach { queries.add(it) }
                     }
                     TasteDiscoveryBalance.DISCOVERY_HUNTER -> {
+                        topUserSubgenres.take(2).forEach { queries.add(it.searchQuery) }
                         filterByLang(relatedArtists).take(3).forEach { queries.add(it) }
                         filterByLang(topUserArtists).take(1).forEach { queries.add(it) }
                     }
@@ -558,7 +603,10 @@ object SlantWaveEngine {
             }
         }
 
-        // 2. Inject user's top genres using clean search terms
+        // 2. Inject user's top subgenres and genres
+        topUserSubgenres.take(2).forEach { sub ->
+            queries.add(sub.searchQuery)
+        }
         if (topUserGenres.isNotEmpty()) {
             val prefersRus = effectiveLanguage == WaveLanguage.RUSSIAN
             topUserGenres.take(2).forEach { genre ->
@@ -711,24 +759,19 @@ object SlantWaveEngine {
             .map { TrackDeduplicationEngine.normalizeText(it.artist) }
             .toSet()
 
-        // Step 1: Deduplicate, remove disliked/live items, and strictly filter out 30s teasers if preferFullLengthTracks is enabled
+        // Step 1: Deduplicate, remove disliked/live items, and strictly filter out 30s teasers/previews
         val deduplicatedPool = TrackDeduplicationEngine.deduplicateAndRank(rawCandidates)
             .filter { track ->
                 track.id !in dislikedTrackIds &&
                     !track.isLiveStream &&
                     track.streamUrl.isNotBlank() &&
+                    !track.isSnippetStream() &&
                     !TrackDeduplicationEngine.isTeaserOrSnippetTitle(track.title)
             }
 
-        val basePool = if (tasteProfile.preferFullLengthTracks) {
-            val fullLengthPool = deduplicatedPool.filter { track ->
-                val hasFullCandidate = track.allStreamCandidates().any { !it.isPreview }
-                (!track.isPreviewOnly || hasFullCandidate) && (track.durationSec == 0 || track.durationSec >= 42)
-            }
-            if (fullLengthPool.size >= 4) fullLengthPool else deduplicatedPool
-        } else {
-            deduplicatedPool
-        }
+        val basePool = deduplicatedPool.filter { track ->
+            track.durationSec == 0 || track.durationSec >= 48
+        }.ifEmpty { deduplicatedPool }
 
         if (basePool.isEmpty()) return emptyList()
 
@@ -790,12 +833,13 @@ object SlantWaveEngine {
             null -> characterFiltered
         }
 
-        // Step 4: Score every track using multi-signal DNA + Artist Similarity Graph + Wave axes
+        // Step 4: Score every track using multi-signal DNA + Pinpoint Subgenres + Artist Similarity Graph + Wave axes
         val familiarMult = tasteProfile.discoveryBalance.familiarWeightMultiplier
         val discoveryMult = tasteProfile.discoveryBalance.discoveryWeightMultiplier
         val hasPersonalSignals = tasteProfile.hasAnyExplicitPreferences ||
             favoriteTracks.isNotEmpty() ||
             playlistTracks.isNotEmpty()
+        val selectedSubgenres = tasteProfile.selectedSubgenres
 
         val scoredPairs = languageFiltered.map { track ->
             var score = 100.0
@@ -804,18 +848,21 @@ object SlantWaveEngine {
             val albumNorm = TrackDeduplicationEngine.normalizeText(track.album)
             val combinedText = "${track.title} ${track.album} ${track.genre} ${track.artist}".lowercase()
             val matchedGenres = inferTrackGenres(track)
+            val matchedSubgenre = selectedSubgenres.firstOrNull { sub ->
+                sub.matchKeywords.any { kw -> combinedText.contains(kw) }
+            }
 
             var primaryReason = ""
 
-            // 1. Full-length stream preference
-            val hasDirectFullStream = !track.isPreviewOnly && track.durationSec >= 45
+            // 1. Full-length stream guarantee
+            val hasDirectFullStream = !track.isSnippetStream() && track.durationSec >= 55
             if (hasDirectFullStream) {
-                score += if (tasteProfile.preferFullLengthTracks) 190.0 else 110.0
-            } else if (track.isPreviewOnly) {
-                score -= if (tasteProfile.preferFullLengthTracks) 180.0 else 45.0
+                score += 220.0
+            } else if (track.isSnippetStream()) {
+                score -= 900.0
             }
 
-            // 2. Direct User Taste DNA Affinity (Artists, Similar Artists, Liked Tracks, Playlists, Albums)
+            // 2. Direct User Taste DNA Affinity (Artists, Pinpoint Subgenres, Similar Artists, Liked Tracks, Playlists, Albums)
             val isFavoriteTrack = track.id in favIds || track.isFavorite
             val isInUserPlaylist = track.id in playlistIds
             val isSelectedOrLikedArtist = artistNorm in selectedAndLikedArtistsNorm ||
@@ -850,6 +897,12 @@ object SlantWaveEngine {
                 score += 185.0 * familiarMult
                 if (primaryReason.isBlank()) primaryReason = "💿 Из любимого альбома «${track.album}»"
             }
+            if (matchedSubgenre != null) {
+                score += 265.0
+                if (primaryReason.isBlank()) {
+                    primaryReason = "🎯 Поджанр ДНК: ${matchedSubgenre.title}"
+                }
+            }
             if (matchingUserGenre != null) {
                 score += 210.0
                 if (primaryReason.isBlank()) {
@@ -864,6 +917,7 @@ object SlantWaveEngine {
                 isSimilarRelatedArtist ||
                 isPlaylistArtist ||
                 isLikedAlbum ||
+                matchedSubgenre != null ||
                 matchingUserGenre != null
 
             if (hasPersonalSignals && !matchesAnyPersonalSignal) {

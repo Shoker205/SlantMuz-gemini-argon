@@ -53,15 +53,27 @@ class MediaPlaybackService : MediaSessionService() {
             pendingIntentFlags
         )
 
-        val favoriteButton = buildFavoriteCommandButton(
-            isFavorite = controller.playbackState.value.currentTrack?.isFavorite == true
-        )
+        val customButtons = buildCustomCommandButtons(controller)
 
-        mediaSession = MediaSession.Builder(this, player)
+        val session = MediaSession.Builder(this, player)
             .setSessionActivity(sessionActivityPendingIntent)
             .setCallback(SlantMediaSessionCallback(controller))
-            .setCustomLayout(ImmutableList.of(favoriteButton))
+            .setCustomLayout(customButtons)
             .build()
+        mediaSession = session
+
+        player.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onMediaItemTransition(
+                mediaItem: androidx.media3.common.MediaItem?,
+                reason: Int
+            ) {
+                refreshCustomLayout(controller)
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                refreshCustomLayout(controller)
+            }
+        })
 
         val notificationProvider = DefaultMediaNotificationProvider.Builder(applicationContext)
             .setChannelId(CHANNEL_ID)
@@ -70,6 +82,25 @@ class MediaPlaybackService : MediaSessionService() {
             .build()
         notificationProvider.setSmallIcon(R.drawable.ic_launcher_foreground)
         setMediaNotificationProvider(notificationProvider)
+    }
+
+    private fun refreshCustomLayout(controller: PlayerController) {
+        val session = mediaSession ?: return
+        runCatching {
+            session.setCustomLayout(buildCustomCommandButtons(controller))
+        }
+    }
+
+    private fun buildCustomCommandButtons(controller: PlayerController): ImmutableList<CommandButton> {
+        val state = controller.playbackState.value
+        val isFavorite = state.currentTrack?.isFavorite == true
+        val isShuffle = state.shuffleEnabled
+
+        return ImmutableList.of(
+            buildFavoriteCommandButton(isFavorite),
+            buildShuffleCommandButton(isShuffle),
+            buildWaveCommandButton()
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,7 +123,8 @@ class MediaPlaybackService : MediaSessionService() {
 
     private fun buildInitialForegroundNotification(): Notification {
         val controller = PlayerController.getInstance(applicationContext)
-        val currentTrack = controller.playbackState.value.currentTrack
+        val state = controller.playbackState.value
+        val currentTrack = state.currentTrack
         val sessionIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -101,12 +133,19 @@ class MediaPlaybackService : MediaSessionService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val subtitleText = if (currentTrack != null) {
+            "${currentTrack.artist} • ${currentTrack.primaryProvider.shortBadge} • FULL 320kbps"
+        } else {
+            "Полноразмерный аудиопоток 320kbps активен"
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(currentTrack?.title ?: getString(R.string.app_name))
-            .setContentText(currentTrack?.artist ?: "Аудиоплеер активен")
+            .setContentText(subtitleText)
+            .setSubText("FULL TRACK • NO PREVIEWS")
             .setContentIntent(pendingIntent)
-            .setOngoing(controller.playbackState.value.isPlaying)
+            .setOngoing(state.isPlaying)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
@@ -124,9 +163,12 @@ class MediaPlaybackService : MediaSessionService() {
         ): MediaSession.ConnectionResult {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(ACTION_TOGGLE_FAVORITE, Bundle.EMPTY))
+                .add(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
+                .add(SessionCommand(ACTION_START_WAVE, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
+                .setCustomLayout(buildCustomCommandButtons(controller))
                 .build()
         }
 
@@ -136,16 +178,22 @@ class MediaPlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction == ACTION_TOGGLE_FAVORITE) {
-                val cur = controller.playbackState.value.currentTrack
-                if (cur != null) {
-                    val newFav = !cur.isFavorite
-                    controller.updateCurrentTrackFavoriteState(newFav)
-                    session.setCustomLayout(
-                        ImmutableList.of(buildFavoriteCommandButton(newFav))
-                    )
+            when (customCommand.customAction) {
+                ACTION_TOGGLE_FAVORITE -> {
+                    controller.triggerFavoriteFromExternal()
+                    refreshCustomLayout(controller)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                ACTION_TOGGLE_SHUFFLE -> {
+                    controller.toggleShuffle()
+                    refreshCustomLayout(controller)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+                ACTION_START_WAVE -> {
+                    controller.triggerWaveFromExternal()
+                    refreshCustomLayout(controller)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
             }
             return super.onCustomCommand(session, controllerInfo, customCommand, args)
         }
@@ -159,6 +207,22 @@ class MediaPlaybackService : MediaSessionService() {
                 if (isFavorite) android.R.drawable.btn_star_big_on
                 else android.R.drawable.btn_star_big_off
             )
+            .build()
+    }
+
+    private fun buildShuffleCommandButton(isShuffle: Boolean): CommandButton {
+        return CommandButton.Builder()
+            .setDisplayName(if (isShuffle) "Перемешивание ВКЛ" else "Перемешать очередь")
+            .setSessionCommand(SessionCommand(ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
+            .setIconResId(android.R.drawable.ic_menu_rotate)
+            .build()
+    }
+
+    private fun buildWaveCommandButton(): CommandButton {
+        return CommandButton.Builder()
+            .setDisplayName("Моя волна ДНК")
+            .setSessionCommand(SessionCommand(ACTION_START_WAVE, Bundle.EMPTY))
+            .setIconResId(android.R.drawable.ic_media_ff)
             .build()
     }
 
@@ -203,5 +267,7 @@ class MediaPlaybackService : MediaSessionService() {
         const val CHANNEL_ID = "slantmuz_playback_channel"
         const val NOTIFICATION_ID = DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID
         const val ACTION_TOGGLE_FAVORITE = "com.example.service.ACTION_TOGGLE_FAVORITE"
+        const val ACTION_TOGGLE_SHUFFLE = "com.example.service.ACTION_TOGGLE_SHUFFLE"
+        const val ACTION_START_WAVE = "com.example.service.ACTION_START_WAVE"
     }
 }

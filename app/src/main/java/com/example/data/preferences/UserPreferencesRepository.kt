@@ -51,6 +51,7 @@ class UserPreferencesRepository(private val context: Context) {
         // User Taste DNA & Pre-Configuration Keys
         val TASTE_ONBOARDING_DONE = booleanPreferencesKey("taste_onboarding_done")
         val TASTE_GENRES = stringSetPreferencesKey("taste_genres")
+        val TASTE_SUBGENRES = stringSetPreferencesKey("taste_subgenres")
         val TASTE_ARTISTS = stringSetPreferencesKey("taste_artists")
         val TASTE_LIKED_ALBUMS = stringSetPreferencesKey("taste_liked_albums")
         val TASTE_LANGUAGES = stringSetPreferencesKey("taste_languages")
@@ -71,7 +72,7 @@ class UserPreferencesRepository(private val context: Context) {
         } else {
             enabledRaw.mapNotNull { name ->
                 runCatching { SourceProvider.valueOf(name) }.getOrNull()
-            }.toSet().ifEmpty { setOf(SourceProvider.JAMENDO, SourceProvider.DEEZER) }
+            }.toSet().ifEmpty { setOf(SourceProvider.JAMENDO, SourceProvider.AUDIUS, SourceProvider.YOUTUBE_PIPED) }
         }
 
         val presetName = prefs[Keys.DSP_PRESET] ?: EqualizerPreset.SLANT_PURE_SIGNATURE.name
@@ -116,6 +117,7 @@ class UserPreferencesRepository(private val context: Context) {
         val tasteProfile = UserTasteProfile(
             isOnboardingCompleted = prefs[Keys.TASTE_ONBOARDING_DONE] ?: false,
             selectedGenreIds = prefs[Keys.TASTE_GENRES].orEmpty(),
+            selectedSubgenreIds = prefs[Keys.TASTE_SUBGENRES].orEmpty(),
             selectedArtists = prefs[Keys.TASTE_ARTISTS].orEmpty(),
             likedAlbums = prefs[Keys.TASTE_LIKED_ALBUMS].orEmpty(),
             preferredLanguages = preferredLanguages,
@@ -179,6 +181,7 @@ class UserPreferencesRepository(private val context: Context) {
         context.slantDataStore.edit { prefs ->
             prefs[Keys.TASTE_ONBOARDING_DONE] = profile.isOnboardingCompleted
             prefs[Keys.TASTE_GENRES] = profile.selectedGenreIds
+            prefs[Keys.TASTE_SUBGENRES] = profile.selectedSubgenreIds
             prefs[Keys.TASTE_ARTISTS] = profile.selectedArtists
             prefs[Keys.TASTE_LIKED_ALBUMS] = profile.likedAlbums
             prefs[Keys.TASTE_LANGUAGES] = profile.preferredLanguages.map { it.name }.toSet()
@@ -196,6 +199,23 @@ class UserPreferencesRepository(private val context: Context) {
                 }
                 prefs[Keys.TASTE_ARTIST_ARTWORKS] = currentSet
             }
+        }
+    }
+
+    suspend fun saveTasteOnboardingResult(
+        selectedGenreIds: Set<String>,
+        selectedSubgenreIds: Set<String> = emptySet(),
+        selectedArtists: Set<String>,
+        discoveryBalance: TasteDiscoveryBalance = TasteDiscoveryBalance.BALANCED,
+        preferFullLengthTracks: Boolean = true
+    ) {
+        context.slantDataStore.edit { prefs ->
+            prefs[Keys.TASTE_ONBOARDING_DONE] = true
+            prefs[Keys.TASTE_GENRES] = selectedGenreIds
+            prefs[Keys.TASTE_SUBGENRES] = selectedSubgenreIds
+            prefs[Keys.TASTE_ARTISTS] = selectedArtists
+            prefs[Keys.TASTE_DISCOVERY_BALANCE] = discoveryBalance.id
+            prefs[Keys.TASTE_PREFER_FULL_TRACKS] = preferFullLengthTracks
         }
     }
 

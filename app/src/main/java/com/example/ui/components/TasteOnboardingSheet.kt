@@ -76,6 +76,7 @@ import com.example.domain.SlantWaveEngine
 import com.example.domain.TasteDiscoveryBalance
 import com.example.domain.TasteEraOption
 import com.example.domain.TasteGenreOption
+import com.example.domain.TasteSubgenreOption
 import com.example.domain.Track
 import com.example.domain.UserTasteDnaSummary
 import com.example.domain.UserTasteProfile
@@ -109,6 +110,7 @@ fun TasteOnboardingSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var selectedGenres by remember(currentProfile) { mutableStateOf(currentProfile.selectedGenreIds) }
+    var selectedSubgenres by remember(currentProfile) { mutableStateOf(currentProfile.selectedSubgenreIds) }
     var selectedArtists by remember(currentProfile) { mutableStateOf(currentProfile.selectedArtists) }
     var draftArtistArtworks by remember(currentProfile, artistArtworks) {
         mutableStateOf(currentProfile.artistArtworks + artistArtworks)
@@ -153,6 +155,7 @@ fun TasteOnboardingSheet(
 
     val liveDraftProfile = remember(
         selectedGenres,
+        selectedSubgenres,
         selectedArtists,
         draftArtistArtworks,
         preferredLanguages,
@@ -164,6 +167,7 @@ fun TasteOnboardingSheet(
         currentProfile.copy(
             isOnboardingCompleted = true,
             selectedGenreIds = selectedGenres,
+            selectedSubgenreIds = selectedSubgenres,
             selectedArtists = selectedArtists,
             artistArtworks = draftArtistArtworks,
             preferredLanguages = preferredLanguages,
@@ -235,7 +239,7 @@ fun TasteOnboardingSheet(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Точность рекомендаций: ${liveDna.personalizationPercent}% • Жанров: ${selectedGenres.size} • Авторов: ${selectedArtists.size}",
+                            text = "Точность ДНК: ${liveDna.personalizationPercent}% • Жанров: ${selectedGenres.size} • Поджанров: ${selectedSubgenres.size} • Авторов: ${selectedArtists.size}",
                             style = MaterialTheme.typography.labelSmall,
                             color = SlantCyan,
                             maxLines = 1,
@@ -264,7 +268,7 @@ fun TasteOnboardingSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val tabs = listOf(
-                    "1. Жанры (${selectedGenres.size})",
+                    "1. Жанры (${selectedGenres.size + selectedSubgenres.size})",
                     "2. Авторы (${selectedArtists.size})",
                     "3. Алгоритм и база"
                 )
@@ -310,11 +314,11 @@ fun TasteOnboardingSheet(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 when (activeTab) {
-                    // TAB 0: GENRES
+                    // TAB 0: 20 MACRO-GENRES + 56 PINPOINT SUBGENRES
                     0 -> {
                         item {
                             Text(
-                                text = "Выберите любимые жанры и музыкальные направления — алгоритм перестроит «Мою волну», главную витрину и умные миксы под ваш стиль:",
+                                text = "Выберите основные жанры и точечные узкие поджанры (56 микро-ниш) — алгоритм настроит «Мою волну» на 100% точное попадание:",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color.White.copy(alpha = 0.72f)
                             )
@@ -323,6 +327,8 @@ fun TasteOnboardingSheet(
                         items(TasteGenreOption.entries, key = { it.id }) { genre ->
                             val isSelected = genre.id in selectedGenres
                             val isInferredFromCollection = genre in dnaSummary.topGenres && !isSelected
+                            val subgenresForGenre = remember(genre.id) { TasteSubgenreOption.forGenre(genre.id) }
+                            val activeSubCount = subgenresForGenre.count { it.id in selectedSubgenres }
 
                             Surface(
                                 onClick = {
@@ -333,15 +339,16 @@ fun TasteOnboardingSheet(
                                     }
                                 },
                                 shape = RoundedCornerShape(18.dp),
-                                color = if (isSelected) {
-                                    SlantCyan.copy(alpha = 0.18f)
+                                color = if (isSelected || activeSubCount > 0) {
+                                    SlantCyan.copy(alpha = 0.16f)
                                 } else {
                                     Color.White.copy(alpha = 0.06f)
                                 },
                                 border = BorderStroke(
-                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    width = if (isSelected || activeSubCount > 0) 1.5.dp else 1.dp,
                                     color = when {
                                         isSelected -> SlantCyan
+                                        activeSubCount > 0 -> SlantViolet
                                         isInferredFromCollection -> SlantViolet.copy(alpha = 0.55f)
                                         else -> Color.White.copy(alpha = 0.1f)
                                     }
@@ -350,59 +357,120 @@ fun TasteOnboardingSheet(
                                     .fillMaxWidth()
                                     .testTag("taste_genre_card_${genre.id}")
                             ) {
-                                Row(
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(
-                                                if (isSelected) SlantCyan.copy(alpha = 0.28f)
-                                                else Color.White.copy(alpha = 0.08f)
-                                            ),
-                                        contentAlignment = Alignment.Center
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(
-                                            imageVector = if (isSelected) Icons.Default.Check else Icons.Default.MusicNote,
-                                            contentDescription = null,
-                                            tint = if (isSelected) SlantCyan else Color.White.copy(alpha = 0.75f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(
+                                                    if (isSelected) SlantCyan.copy(alpha = 0.28f)
+                                                    else Color.White.copy(alpha = 0.08f)
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isSelected) Icons.Default.Check else Icons.Default.MusicNote,
+                                                contentDescription = null,
+                                                tint = if (isSelected) SlantCyan else Color.White.copy(alpha = 0.75f),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
 
-                                    Spacer(modifier = Modifier.width(12.dp))
+                                        Spacer(modifier = Modifier.width(12.dp))
 
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = genre.title,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    color = if (isSelected) SlantCyan else Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (activeSubCount > 0) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "• $activeSubCount поджанр.",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = SlantEmerald,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                } else if (isInferredFromCollection) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "• В ваших лайках",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = SlantViolet,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
                                             Text(
-                                                text = genre.title,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = if (isSelected) SlantCyan else Color.White,
-                                                fontWeight = FontWeight.Bold,
+                                                text = genre.subtitle,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color.White.copy(alpha = 0.65f),
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
-                                            if (isInferredFromCollection) {
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = "• В ваших лайках",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = SlantViolet,
-                                                    fontWeight = FontWeight.SemiBold
+                                        }
+                                    }
+
+                                    // Narrow Subgenre Chips for pinpoint recommendations
+                                    if (subgenresForGenre.isNotEmpty()) {
+                                        FlowRow(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            subgenresForGenre.forEach { sub ->
+                                                val subSelected = sub.id in selectedSubgenres
+                                                FilterChip(
+                                                    selected = subSelected,
+                                                    onClick = {
+                                                        if (subSelected) {
+                                                            selectedSubgenres = selectedSubgenres - sub.id
+                                                        } else {
+                                                            selectedSubgenres = selectedSubgenres + sub.id
+                                                            selectedGenres = selectedGenres + genre.id
+                                                        }
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = sub.title,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = if (subSelected) FontWeight.Bold else FontWeight.Medium
+                                                        )
+                                                    },
+                                                    leadingIcon = if (subSelected) {
+                                                        {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                        }
+                                                    } else null,
+                                                    colors = FilterChipDefaults.filterChipColors(
+                                                        selectedContainerColor = SlantViolet.copy(alpha = 0.28f),
+                                                        selectedLabelColor = Color.White,
+                                                        selectedLeadingIconColor = SlantCyan,
+                                                        containerColor = Color.White.copy(alpha = 0.05f),
+                                                        labelColor = Color.White.copy(alpha = 0.78f)
+                                                    ),
+                                                    modifier = Modifier.testTag("subgenre_chip_${sub.id}")
                                                 )
                                             }
                                         }
-                                        Text(
-                                            text = genre.subtitle,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.White.copy(alpha = 0.65f),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
                                     }
                                 }
                             }

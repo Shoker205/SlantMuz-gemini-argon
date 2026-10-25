@@ -172,6 +172,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     val artistAutocompleteSuggestions by viewModel.artistAutocompleteSuggestions.collectAsStateWithLifecycle()
     val isArtistSuggestLoading by viewModel.isArtistSuggestLoading.collectAsStateWithLifecycle()
     val artistArtworksMap by viewModel.artistArtworksMap.collectAsStateWithLifecycle()
+    val cloudAccountState by viewModel.cloudAccountState.collectAsStateWithLifecycle()
     val likedAlbumKeys = userSettings.tasteProfile.likedAlbums
     val playlistDomainTracks = remember(playlists) {
         playlists.flatMap { pw -> pw.tracks.map { it.toDomain() } }
@@ -188,6 +189,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showWaveSettingsSheet by remember { mutableStateOf(false) }
     var showTasteSetupSheet by remember { mutableStateOf(false) }
+    var showAccountAuthSheet by remember { mutableStateOf(false) }
     var trackForActionsSheet by remember { mutableStateOf<Track?>(null) }
     var trackToAddToPlaylist by remember { mutableStateOf<Track?>(null) }
 
@@ -409,9 +411,11 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             activeLyricLine = activeLyricLine,
                             downloadingIds = downloadingIds,
                             waveSettings = waveSettings,
+                            tasteProfile = userSettings.tasteProfile,
                             isWaveGenerating = isWaveGenerating,
                             waveQueueTracks = waveQueueTracks,
                             tasteDnaSummary = tasteDnaSummary,
+                            cloudAccountState = cloudAccountState,
                             resetTrigger = exploreResetTrigger,
                             onPlayTrack = { track, queue -> viewModel.playTrack(track, queue) },
                             onPlayPause = { viewModel.togglePlayPause() },
@@ -423,6 +427,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onOpenTrackMenu = { trackForActionsSheet = it },
                             onOpenWaveSettings = { showWaveSettingsSheet = true },
                             onOpenTasteSetup = { showTasteSetupSheet = true },
+                            onOpenAccountAuth = { showAccountAuthSheet = true },
                             onOpenArtist = { artistName ->
                                 viewModel.openArtistProfile(artistName)
                                 navController.navigate(SlantDestinations.ROUTE_ARTIST) {
@@ -709,6 +714,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             remoteConfig = remoteConfig,
                             exoCacheBytes = exoCacheBytes,
                             roomOfflineBytes = roomOfflineBytes,
+                            cloudAccountState = cloudAccountState,
                             resetTrigger = settingsResetTrigger,
                             onOpenSubCategory = { subCat ->
                                 navController.navigate(SlantDestinations.settingsSubRoute(subCat)) {
@@ -716,7 +722,9 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                                 }
                             },
                             onOpenEqualizer = { showEqualizerSheet = true },
-                            onOpenTasteSetup = { showTasteSetupSheet = true }
+                            onOpenTasteSetup = { showTasteSetupSheet = true },
+                            onOpenAccountAuth = { showAccountAuthSheet = true },
+                            onSyncAccountNow = { viewModel.syncAccountWithCloud() }
                         )
                     }
 
@@ -733,6 +741,7 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             currentTrack = playbackState.currentTrack,
                             isPlaying = playbackState.isPlaying,
                             activeLyricLine = activeLyricLine,
+                            cloudAccountState = cloudAccountState,
                             onBack = { navController.popBackStack() },
                             onPlayPause = { viewModel.togglePlayPause() },
                             onPrevious = { viewModel.skipPrevious() },
@@ -748,7 +757,9 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
                             onClearAllCaches = { viewModel.clearAllCaches() },
                             onSyncRemoteConfig = { viewModel.syncFirebaseRemoteConfig() },
                             onOverrideBitrate = { viewModel.setRemoteBitrateOverride(it) },
-                            onOpenTasteSetup = { showTasteSetupSheet = true }
+                            onOpenTasteSetup = { showTasteSetupSheet = true },
+                            onOpenAccountAuth = { showAccountAuthSheet = true },
+                            onSyncAccountNow = { viewModel.syncAccountWithCloud() }
                         )
                     }
                 }
@@ -845,6 +856,19 @@ fun SlantMuzRootApp(viewModel: PlayerViewModel) {
             onVirtualizerChange = { viewModel.setVirtualizerPercent(it) },
             onLoudnessChange = { viewModel.setLoudnessGainDb(it) },
             onDismiss = { showEqualizerSheet = false }
+        )
+    }
+
+    if (showAccountAuthSheet) {
+        com.example.ui.components.AccountAuthSheet(
+            accountState = cloudAccountState,
+            onSignInWithGoogle = { viewModel.signInWithGoogle(context) },
+            onSignInOrRegisterWithEmail = { email, password, displayName, isRegister ->
+                viewModel.signInOrRegisterWithEmail(email, password, displayName, isRegister)
+            },
+            onSyncNow = { viewModel.syncAccountWithCloud() },
+            onSignOut = { viewModel.signOutAccount() },
+            onDismiss = { showAccountAuthSheet = false }
         )
     }
 

@@ -63,12 +63,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import com.example.data.preferences.AppUserSettings
+import com.example.domain.CloudAccountState
 import com.example.domain.ProviderHealthStatus
 import com.example.domain.RemoteStreamingConfig
 import com.example.domain.SettingsSubCategory
 import com.example.domain.SourceProvider
 import com.example.domain.Track
+import com.example.ui.components.AccountCloudSummaryCard
 import com.example.ui.components.LiquidGlassCard
 import com.example.ui.components.MarqueeText
 import com.example.ui.components.ProviderBadgeChip
@@ -93,10 +101,13 @@ fun DeveloperSettingsScreen(
     remoteConfig: RemoteStreamingConfig,
     exoCacheBytes: Long,
     roomOfflineBytes: Long,
+    cloudAccountState: CloudAccountState = CloudAccountState(),
     resetTrigger: Int = 0,
     onOpenSubCategory: (SettingsSubCategory) -> Unit = {},
     onOpenEqualizer: () -> Unit = {},
     onOpenTasteSetup: () -> Unit = {},
+    onOpenAccountAuth: () -> Unit = {},
+    onSyncAccountNow: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -136,17 +147,26 @@ fun DeveloperSettingsScreen(
             )
         }
 
-        // GROUP 0: МУЗЫКАЛЬНЫЙ ДНК И ПЕРСОНАЛИЗАЦИЯ
+        // GROUP 0: АККАУНТ, ОБЛАКО И МУЗЫКАЛЬНЫЙ ДНК
         item {
-            SettingsGroupHeader(title = "Персонализация и алгоритмы")
+            SettingsGroupHeader(title = "Аккаунт, облако и персонализация")
+        }
+
+        item {
+            AccountCloudSummaryCard(
+                accountState = cloudAccountState,
+                onOpenAuthSheet = onOpenAccountAuth,
+                onSyncNow = onSyncAccountNow
+            )
         }
 
         item {
             val genresCount = userSettings.tasteProfile.selectedGenreIds.size
+            val subgenresCount = userSettings.tasteProfile.selectedSubgenreIds.size
             val artistsCount = userSettings.tasteProfile.selectedArtists.size
             SettingsCategoryCard(
                 category = SettingsSubCategory.TASTE_DNA,
-                statusBadge = "Жанров: $genresCount • Авторов: $artistsCount • ${userSettings.tasteProfile.discoveryBalance.title}",
+                statusBadge = "Жанров: $genresCount • Поджанров: $subgenresCount • Авторов: $artistsCount",
                 icon = Icons.Default.AutoAwesome,
                 tintColor = SlantCyan,
                 onClick = { onOpenSubCategory(SettingsSubCategory.TASTE_DNA) },
@@ -267,6 +287,7 @@ fun SettingsSubCategoryScreen(
     currentTrack: Track?,
     isPlaying: Boolean,
     activeLyricLine: String?,
+    cloudAccountState: CloudAccountState = CloudAccountState(),
     onBack: () -> Unit,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
@@ -281,6 +302,8 @@ fun SettingsSubCategoryScreen(
     onSyncRemoteConfig: () -> Unit,
     onOverrideBitrate: (Int) -> Unit,
     onOpenTasteSetup: () -> Unit = {},
+    onOpenAccountAuth: () -> Unit = {},
+    onSyncAccountNow: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -339,6 +362,48 @@ fun SettingsSubCategoryScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             when (subCategory) {
+                SettingsSubCategory.ACCOUNT_CLOUD -> {
+                    item {
+                        AccountCloudSummaryCard(
+                            accountState = cloudAccountState,
+                            onOpenAuthSheet = onOpenAccountAuth,
+                            onSyncNow = onSyncAccountNow
+                        )
+                    }
+                    item {
+                        LiquidGlassCard(
+                            cornerRadius = 22.dp,
+                            tintColor = SlantEmerald,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "Облачная синхронизация Firebase Firestore",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "• Автоматическое резервное копирование любимых треков, плейлистов и Музыкального ДНК\n• Вход через Google (Credential Manager) или по Email/паролю\n• Все 56 узких поджанров и любимые авторы сохраняются при переустановке",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Button(
+                                    onClick = onOpenAccountAuth,
+                                    modifier = Modifier.fillMaxWidth().testTag("open_account_sheet_from_sub")
+                                ) {
+                                    Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(if (cloudAccountState.isSignedIn) "Управление аккаунтом и синхронизацией" else "Войти или зарегистрироваться")
+                                }
+                            }
+                        }
+                    }
+                }
+
                 SettingsSubCategory.TASTE_DNA -> {
                     item {
                         LiquidGlassCard(
@@ -358,6 +423,7 @@ fun SettingsSubCategoryScreen(
                                 )
                                 Text(
                                     text = "Выбранные жанры: ${userSettings.tasteProfile.selectedGenres.joinToString(", ") { it.title }.ifBlank { "Авто-определение по коллекции" }}\n" +
+                                        "Точечные поджанры: ${userSettings.tasteProfile.selectedSubgenres.joinToString(", ") { it.title }.ifBlank { "Не выбраны (рекомендуется выбрать)" }}\n" +
                                         "Выбранные авторы: ${userSettings.tasteProfile.selectedArtists.joinToString(", ").ifBlank { "Из ваших лайков и плейлистов" }}\n" +
                                         "Любимых альбомов: ${userSettings.tasteProfile.likedAlbums.size}\n" +
                                         "Режим рекомендаций: ${userSettings.tasteProfile.discoveryBalance.title}",
@@ -1019,27 +1085,72 @@ private fun WidgetPreviewShowcaseItem(
                     .background(
                         Brush.linearGradient(
                             listOf(
-                                Color(0xFF1A2133),
-                                Color(0xFF251F38)
+                                Color(0xFF141B2D),
+                                Color(0xFF231C3A),
+                                Color(0xFF0E2936)
                             )
                         )
                     )
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
+                val infiniteTransition = rememberInfiniteTransition(label = "widget_eq_${preset.name}")
+                val bar1 = infiniteTransition.animateFloat(
+                    initialValue = 0.28f,
+                    targetValue = if (isPlaying) 0.95f else 0.32f,
+                    animationSpec = infiniteRepeatable(tween(420, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                    label = "b1"
+                )
+                val bar2 = infiniteTransition.animateFloat(
+                    initialValue = 0.45f,
+                    targetValue = if (isPlaying) 0.85f else 0.45f,
+                    animationSpec = infiniteRepeatable(tween(580, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                    label = "b2"
+                )
+                val bar3 = infiniteTransition.animateFloat(
+                    initialValue = 0.22f,
+                    targetValue = if (isPlaying) 1.0f else 0.25f,
+                    animationSpec = infiniteRepeatable(tween(360, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+                    label = "b3"
+                )
+
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Animated equalizer spectrum badge inside widget preview
+                        Row(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(SlantCyan.copy(alpha = 0.16f))
+                                .padding(horizontal = 7.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.Bottom
+                        ) {
+                            listOf(bar1.value, bar2.value, bar3.value, bar1.value).forEach { frac ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height((22f * frac).dp)
+                                        .clip(CircleShape)
+                                        .background(SlantCyan)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
                         Column(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(end = 6.dp)
                         ) {
                             Text(
-                                text = "SLANTMUZ • ${preset.gridSpec}",
+                                text = "SLANTMUZ • ${preset.gridSpec} • 320KBPS FULL",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = SlantCyan,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
                             MarqueeText(
@@ -1060,7 +1171,7 @@ private fun WidgetPreviewShowcaseItem(
                         if (preset != WidgetSizePreset.SMALL) {
                             IconButton(
                                 onClick = onPrevious,
-                                modifier = Modifier.size(30.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.SkipPrevious,
@@ -1073,7 +1184,10 @@ private fun WidgetPreviewShowcaseItem(
 
                         IconButton(
                             onClick = onPlayPause,
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(SlantCyan.copy(alpha = 0.22f))
                         ) {
                             Icon(
                                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -1085,7 +1199,7 @@ private fun WidgetPreviewShowcaseItem(
 
                         IconButton(
                             onClick = onNext,
-                            modifier = Modifier.size(30.dp)
+                            modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.SkipNext,
@@ -1097,23 +1211,24 @@ private fun WidgetPreviewShowcaseItem(
                     }
 
                     if (preset == WidgetSizePreset.MEDIUM || preset == WidgetSizePreset.LARGE) {
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         LinearProgressIndicator(
-                            progress = { if (track != null) 0.42f else 0f },
+                            progress = { if (track != null) 0.42f else 0.15f },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(3.dp),
+                                .height(4.dp)
+                                .clip(CircleShape),
                             color = SlantCyan,
                             trackColor = Color.White.copy(alpha = 0.15f)
                         )
                     }
 
-                    if (preset == WidgetSizePreset.LARGE && !activeLyricLine.isNullOrBlank()) {
+                    if (preset == WidgetSizePreset.LARGE) {
                         Spacer(modifier = Modifier.height(6.dp))
                         MarqueeText(
-                            text = "♪ $activeLyricLine",
+                            text = if (!activeLyricLine.isNullOrBlank()) "♪ $activeLyricLine" else "♪ Полный аудиопоток 320 kbps • Караоке LRCLIB активно",
                             style = MaterialTheme.typography.labelSmall,
-                            color = SlantViolet
+                            color = SlantEmerald
                         )
                     }
                 }

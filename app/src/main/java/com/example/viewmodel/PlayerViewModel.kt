@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.cloud.CloudSyncRepository
 import com.example.data.local.LocalMediaScanner
 import com.example.data.local.PlaylistWithTracks
 import com.example.data.local.SlantMuzDatabase
@@ -17,6 +18,7 @@ import com.example.domain.AlbumSummary
 import com.example.domain.ArtistBioInfo
 import com.example.domain.ArtistProfile
 import com.example.domain.ArtistSuggestion
+import com.example.domain.CloudAccountState
 import com.example.domain.DspState
 import com.example.domain.EqualizerPreset
 import com.example.domain.LrcParser
@@ -57,6 +59,7 @@ class PlayerViewModel(
     private val lyricsRepository: LyricsRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val remoteConfigManager: FirebaseRemoteConfigManager,
+    private val cloudSyncRepository: CloudSyncRepository,
     private val playerController: PlayerController
 ) : ViewModel() {
 
@@ -64,6 +67,7 @@ class PlayerViewModel(
     val dspState: StateFlow<DspState> = playerController.audioEffectsManager.dspState
     val providerStatuses: StateFlow<List<ProviderHealthStatus>> = musicRepository.providerStatuses
     val remoteConfig: StateFlow<RemoteStreamingConfig> = remoteConfigManager.configFlow
+    val cloudAccountState: StateFlow<CloudAccountState> = cloudSyncRepository.accountState
 
     val userSettings: StateFlow<AppUserSettings> = preferencesRepository.settingsFlow
         .stateIn(
@@ -198,6 +202,12 @@ class PlayerViewModel(
                 musicRepository.recordPlaybackInHistory(track)
                 loadLyricsAndBioForTrack(track)
                 refreshExoCacheSize()
+            },
+            onToggleFavorite = { track ->
+                toggleFavorite(track)
+            },
+            onStartWave = {
+                launchWave(_waveSettings.value)
             }
         )
 
@@ -216,6 +226,70 @@ class PlayerViewModel(
         scanLocalDeviceAudio()
         refreshExoCacheSize()
         preloadArtistArtworksInBackground()
+
+        // If the user is already signed in to Firebase, perform a background cloud sync on startup
+        if (cloudSyncRepository.accountState.value.isSignedIn) {
+            triggerBackgroundCloudSync()
+        }
+    }
+
+    // --- CLOUD ACCOUNT AUTHENTICATION & FIRESTORE SYNC ---
+
+    fun signInWithGoogle(activityContext: Context) {
+        viewModelScope.launch {
+            val result = cloudSyncRepository.signInWithGoogle(activityContext = activityContext)
+            if (result.isSuccess) {
+                syncAccountWithCloud()
+            }
+        }
+    }
+
+    fun signInOrRegisterWithEmail(
+        email: String,
+        password: String,
+        displayName: String,
+        isRegister: Boolean
+    ) {
+        viewModelScope.launch {
+            val result = cloudSyncRepository.signInOrRegisterWithEmail(
+                email = email,
+                password = password,
+                displayName = displayName,
+                isRegister = isRegister
+            )
+            if (result.isSuccess) {
+                syncAccountWithCloud()
+            }
+        }
+    }
+
+    fun syncAccountWithCloud() {
+        viewModelScope.launch {
+            cloudSyncRepository.syncWithCloud(
+                tasteProfile = userSettings.value.tasteProfile,
+                favoriteTracks = favoriteTracks.value,
+                likedArtists = _likedArtistNames.value,
+                likedAlbums = userSettings.value.tasteProfile.likedAlbums,
+                dislikedTrackIds = _dislikedTrackIds.value,
+                playlists = playlists.value
+            )
+            refreshExploreFeed()
+        }
+    }
+
+    fun signOutAccount() {
+        cloudSyncRepository.signOut()
+    }
+
+    private fun triggerBackgroundCloudSync() {
+        cloudSyncRepository.triggerBackgroundSync(
+            tasteProfile = userSettings.value.tasteProfile,
+            favoriteTracks = favoriteTracks.value,
+            likedArtists = _likedArtistNames.value,
+            likedAlbums = userSettings.value.tasteProfile.likedAlbums,
+            dislikedTrackIds = _dislikedTrackIds.value,
+            playlists = playlists.value
+        )
     }
 
     private fun currentPlaylistDomainTracks(): List<Track> {
@@ -263,6 +337,7 @@ class PlayerViewModel(
             preferencesRepository.saveTasteProfile(enrichedProfile)
             _likedArtistNames.value = enrichedProfile.selectedArtists
             _artistArtworksMap.value = mergedArtworks
+            triggerBackgroundCloudSync()
             refreshExploreFeed()
             if (launchWaveImmediately) {
                 launchWave(_waveSettings.value)
@@ -1061,6 +1136,7 @@ class PlayerViewModel(
             _searchResults.value = _searchResults.value.map {
                 if (it.id == track.id) it.copy(isFavorite = isFav) else it
             }
+            triggerBackgroundCloudSync()
         }
     }
 
@@ -1084,24 +1160,28 @@ class PlayerViewModel(
         if (name.isBlank()) return
         viewModelScope.launch {
             musicRepository.createPlaylist(name, description)
+            triggerBackgroundCloudSync()
         }
     }
 
     fun deletePlaylist(playlistId: Long) {
         viewModelScope.launch {
             musicRepository.deletePlaylist(playlistId)
+            triggerBackgroundCloudSync()
         }
     }
 
     fun addTrackToPlaylist(playlistId: Long, track: Track) {
         viewModelScope.launch {
             musicRepository.addTrackToPlaylist(playlistId, track)
+            triggerBackgroundCloudSync()
         }
     }
 
     fun removeTrackFromPlaylist(playlistId: Long, trackId: String) {
         viewModelScope.launch {
             musicRepository.removeTrackFromPlaylist(playlistId, trackId)
+            triggerBackgroundCloudSync()
         }
     }
 
@@ -1232,6 +1312,7 @@ class PlayerViewModel(
             val lyricsRepo = LyricsRepository(db.dao())
             val prefsRepo = UserPreferencesRepository(appCtx)
             val remoteConfig = FirebaseRemoteConfigManager()
+            val cloudSyncRepo = CloudSyncRepository(appCtx, prefsRepo, musicRepo)
             val controller = PlayerController.getInstance(appCtx)
             return PlayerViewModel(
                 appContext = appCtx,
@@ -1239,6 +1320,7 @@ class PlayerViewModel(
                 lyricsRepository = lyricsRepo,
                 preferencesRepository = prefsRepo,
                 remoteConfigManager = remoteConfig,
+                cloudSyncRepository = cloudSyncRepo,
                 playerController = controller
             ) as T
         }

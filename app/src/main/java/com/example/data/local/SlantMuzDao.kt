@@ -22,6 +22,9 @@ interface SlantMuzDao {
     @Query("SELECT * FROM tracks WHERE id = :trackId LIMIT 1")
     suspend fun getTrackById(trackId: String): TrackEntity?
 
+    @Query("SELECT * FROM tracks WHERE id IN (:ids)")
+    suspend fun getTracksByIds(ids: List<String>): List<TrackEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTrack(track: TrackEntity)
 

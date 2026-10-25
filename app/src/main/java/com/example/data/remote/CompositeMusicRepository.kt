@@ -652,82 +652,57 @@ class CompositeMusicRepository(
         if (!cached.isNullOrBlank() && isDirectPlayableScheme(cached)) {
             return@withContext cached
         }
-        val primaryCandidate = track.allStreamCandidates().firstOrNull()
+        val primaryCandidate = track.allStreamCandidates().firstOrNull { !it.isPreview }
+            ?: track.allStreamCandidates().firstOrNull()
         val rawUrl = primaryCandidate?.streamUrl ?: track.streamUrl
         val provider = primaryCandidate?.provider ?: track.primaryProvider
         resolvePlayableUrl(provider, rawUrl, track)
     }
 
     /**
-     * Resolves a playable audio URL with:
+     * Resolves a 100% full-length playable audio URL with:
      * 1. 0ms In-Memory Cache hit (`resolvedStreamCache`)
-     * 2. Full-Track Audio Upgrade for `fulltrack://` or 30s preview tracks (racing YouTube Music Piped/Invidious,
-     *    Audius, and Jamendo in parallel so full-length versions play instead of 30s teasers!)
-     * 3. Automatic fallback to direct HTTP streams so playback never fails.
+     * 2. Multi-Engine Full-Length Audio Resolution (`FullLengthAudioResolver`: JioSaavn 320kbps +
+     *    Hearthis.at Full MP3 + Audius 320kbps + Jamendo + Internet Archive + Piped/Invidious)
+     * 3. Strict 0% tolerance for 30-second chorus snippets (`isPreviewSnippetUrl` is categorically blocked).
      */
     suspend fun resolvePlayableUrl(provider: SourceProvider, rawUrl: String, track: Track): String =
         withContext(Dispatchers.IO) {
+            // 0. Local offline file check first
+            if (track.isCachedOffline && !track.offlineFilePath.isNullOrBlank()) {
+                val file = File(track.offlineFilePath)
+                if (file.exists() && file.length() > 1024L) {
+                    return@withContext file.absolutePath
+                }
+            }
+
             // 1. Check in-memory resolved stream cache first (0ms instant switch!)
             resolvedStreamCache[rawUrl]?.takeIf { isDirectPlayableScheme(it) }?.let {
                 return@withContext it
             }
-            if (!rawUrl.startsWith("http")) {
-                resolvedStreamCache[track.id]?.takeIf { isDirectPlayableScheme(it) }?.let {
-                    return@withContext it
-                }
+            resolvedStreamCache[track.id]?.takeIf { isDirectPlayableScheme(it) }?.let {
+                return@withContext it
             }
 
             if (isDirectPlayableScheme(rawUrl)) {
+                resolvedStreamCache[track.id] = rawUrl
                 return@withContext rawUrl
             }
 
-            // 2. Handle `fulltrack://artist|title|duration` full-length audio upgrade
-            if (rawUrl.startsWith("fulltrack://")) {
+            // 2. Handle `fulltrack://artist|title|duration` OR upgrade any legacy snippet URL
+            if (rawUrl.startsWith("fulltrack://") || com.example.domain.isPreviewSnippetUrl(rawUrl)) {
                 val payload = rawUrl.removePrefix("fulltrack://")
                 val parts = payload.split("|")
-                val artist = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: track.artist
+                val artist = parts.getOrNull(0)?.takeIf { it.isNotBlank() && !rawUrl.startsWith("http") } ?: track.artist
                 val title = parts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: track.title
-                val expectedDur = parts.getOrNull(2)?.toIntOrNull() ?: track.durationSec
+                val expectedDur = parts.getOrNull(2)?.toIntOrNull() ?: track.durationSec.coerceAtLeast(180)
 
-                val fullStream = withTimeoutOrNull(3800L) {
-                    coroutineScope {
-                        // Race YouTube Piped/Invidious full audio resolver + Audius + Jamendo in parallel
-                        val ytDeferred = async {
-                            runCatching {
-                                youtubeSource.resolveFullTrackByMetadata(artist, title, expectedDur)
-                            }.getOrNull()
-                        }
-                        val audiusDeferred = async {
-                            runCatching {
-                                val q = "$artist $title".trim()
-                                audiusSource.search(q, limit = 4).tracks.firstOrNull { cand ->
-                                    cand.durationSec >= 48 &&
-                                        TrackDeduplicationEngine.combinedSimilarity(cand.title, title) >= 0.78 &&
-                                        (TrackDeduplicationEngine.areArtistNamesEquivalent(cand.artist, artist) ||
-                                            TrackDeduplicationEngine.combinedSimilarity(cand.artist, artist) >= 0.72) &&
-                                        isDirectPlayableScheme(cand.streamUrl)
-                                }?.streamUrl
-                            }.getOrNull()
-                        }
-                        val jamendoDeferred = async {
-                            runCatching {
-                                val q = "$artist $title".trim()
-                                jamendoSource.search(q, limit = 4).tracks.firstOrNull { cand ->
-                                    cand.durationSec >= 48 &&
-                                        TrackDeduplicationEngine.combinedSimilarity(cand.title, title) >= 0.78 &&
-                                        (TrackDeduplicationEngine.areArtistNamesEquivalent(cand.artist, artist) ||
-                                            TrackDeduplicationEngine.combinedSimilarity(cand.artist, artist) >= 0.72) &&
-                                        isDirectPlayableScheme(cand.streamUrl)
-                                }?.streamUrl
-                            }.getOrNull()
-                        }
-
-                        ytDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
-                            ?: audiusDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
-                            ?: jamendoDeferred.await()?.takeIf { isDirectPlayableScheme(it) }
-                    }
-                }
-
+                val resolvedCandidate = FullLengthAudioResolver.resolveFullLengthStream(
+                    artist = artist,
+                    title = title,
+                    expectedDurationSec = expectedDur
+                )
+                val fullStream = resolvedCandidate?.streamUrl
                 if (!fullStream.isNullOrBlank() && isDirectPlayableScheme(fullStream)) {
                     resolvedStreamCache[rawUrl] = fullStream
                     resolvedStreamCache[track.id] = fullStream
@@ -751,8 +726,9 @@ class CompositeMusicRepository(
                 return@withContext primaryResolved
             }
 
-            // 4. Fallback to any existing direct HTTP candidate in the track's fallbackStreams
+            // 4. Check any non-preview direct HTTP candidate in the track's fallbackStreams
             val existingDirect = track.allStreamCandidates()
+                .filter { !it.isPreview }
                 .map { it.streamUrl }
                 .firstOrNull { isDirectPlayableScheme(it) }
             if (existingDirect != null) {
@@ -760,42 +736,22 @@ class CompositeMusicRepository(
                 return@withContext existingDirect
             }
 
-            // 5. Final live cross-provider fallback
-            val searchQuery = "${track.artist} ${track.title}".trim()
-            val fallbackUrl = withTimeoutOrNull(3500L) {
-                coroutineScope {
-                    val dz = async {
-                        runCatching {
-                            deezerSource.search(searchQuery, limit = 3).tracks
-                                .flatMap { it.allStreamCandidates() }
-                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-                        }.getOrNull()
-                    }
-                    val itn = async {
-                        runCatching {
-                            itunesSource.search(searchQuery, limit = 3).tracks
-                                .flatMap { it.allStreamCandidates() }
-                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-                        }.getOrNull()
-                    }
-                    val jam = async {
-                        runCatching {
-                            jamendoSource.search(track.title, limit = 3).tracks
-                                .firstOrNull { isDirectPlayableScheme(it.streamUrl) }?.streamUrl
-                        }.getOrNull()
-                    }
-                    dz.await() ?: itn.await() ?: jam.await()
-                }
-            }
-            if (!fallbackUrl.isNullOrBlank()) {
-                resolvedStreamCache[track.id] = fallbackUrl
-                return@withContext fallbackUrl
+            // 5. Final full-length cross-provider resolution (JioSaavn 320kbps + Hearthis + Audius + Jamendo)
+            val finalCandidate = FullLengthAudioResolver.resolveFullLengthStream(
+                artist = track.artist,
+                title = track.title,
+                expectedDurationSec = track.durationSec.coerceAtLeast(180)
+            )
+            if (finalCandidate != null && isDirectPlayableScheme(finalCandidate.streamUrl)) {
+                resolvedStreamCache[track.id] = finalCandidate.streamUrl
+                return@withContext finalCandidate.streamUrl
             }
 
             ""
         }
 
     private fun isDirectPlayableScheme(url: String): Boolean {
+        if (url.isBlank() || com.example.domain.isPreviewSnippetUrl(url)) return false
         return url.startsWith("https://") ||
             url.startsWith("http://") ||
             url.startsWith("content://") ||
@@ -811,7 +767,7 @@ class CompositeMusicRepository(
         } else {
             dao.upsertTrack(
                 TrackEntity.fromDomain(
-                    track = track,
+                    track = sanitizeTrackForFullLength(track),
                     isFavorite = newFav
                 )
             )
@@ -820,11 +776,13 @@ class CompositeMusicRepository(
     }
 
     suspend fun recordPlaybackInHistory(track: Track) = withContext(Dispatchers.IO) {
-        val existing = dao.getTrackById(track.id)
+        val sanitized = sanitizeTrackForFullLength(track)
+        val existing = dao.getTrackById(sanitized.id)
         val now = System.currentTimeMillis()
         if (existing != null) {
             dao.upsertTrack(
                 existing.copy(
+                    streamUrl = sanitized.streamUrl,
                     isInHistory = true,
                     lastPlayedAt = now,
                     playCount = existing.playCount + 1
@@ -833,12 +791,54 @@ class CompositeMusicRepository(
         } else {
             dao.upsertTrack(
                 TrackEntity.fromDomain(
-                    track = track,
+                    track = sanitized,
                     isInHistory = true,
                     lastPlayedAt = now,
                     playCount = 1
                 )
             )
+        }
+    }
+
+    /**
+     * Merges cloud-synced favorite tracks from Firebase Firestore into local Room storage.
+     */
+    suspend fun mergeCloudFavoriteTracks(cloudTracks: List<Track>) = withContext(Dispatchers.IO) {
+        if (cloudTracks.isEmpty()) return@withContext
+        val ids = cloudTracks.map { it.id }
+        val existingMap = dao.getTracksByIds(ids).associateBy { it.id }
+        cloudTracks.forEach { rawTrack ->
+            val track = sanitizeTrackForFullLength(rawTrack)
+            val existing = existingMap[track.id]
+            if (existing != null) {
+                if (!existing.isFavorite) {
+                    dao.setFavorite(track.id, true)
+                }
+            } else {
+                dao.upsertTrack(
+                    TrackEntity.fromDomain(
+                        track = track,
+                        isFavorite = true
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Ensures no legacy 30s preview URL is ever persisted as a primary streamUrl.
+     */
+    private fun sanitizeTrackForFullLength(track: Track): Track {
+        return if (com.example.domain.isPreviewSnippetUrl(track.streamUrl)) {
+            val fullUri = "fulltrack://${track.artist.trim()}|${track.title.trim()}|${track.durationSec.coerceAtLeast(180)}"
+            track.copy(
+                streamUrl = fullUri,
+                isPreviewOnly = false,
+                durationSec = track.durationSec.coerceAtLeast(180),
+                fallbackStreams = track.fallbackStreams.filter { !it.isPreview && !com.example.domain.isPreviewSnippetUrl(it.streamUrl) }
+            )
+        } else {
+            track
         }
     }
 
@@ -882,7 +882,7 @@ class CompositeMusicRepository(
             } else {
                 dao.upsertTrack(
                     TrackEntity.fromDomain(
-                        track = track,
+                        track = sanitizeTrackForFullLength(track),
                         isCachedOffline = true,
                         offlineFilePath = localPath,
                         offlineSizeBytes = sizeBytes
@@ -919,12 +919,13 @@ class CompositeMusicRepository(
     }
 
     suspend fun addTrackToPlaylist(playlistId: Long, track: Track) = withContext(Dispatchers.IO) {
-        val existing = dao.getTrackById(track.id)
+        val sanitized = sanitizeTrackForFullLength(track)
+        val existing = dao.getTrackById(sanitized.id)
         if (existing == null) {
-            dao.upsertTrack(TrackEntity.fromDomain(track))
+            dao.upsertTrack(TrackEntity.fromDomain(sanitized))
         }
         dao.insertPlaylistTrackCrossRef(
-            PlaylistTrackCrossRef(playlistId = playlistId, id = track.id)
+            PlaylistTrackCrossRef(playlistId = playlistId, id = sanitized.id)
         )
     }
 
@@ -948,9 +949,25 @@ class CompositeMusicRepository(
         dao.clearSearchHistory()
     }
 
+    /**
+     * Batch-enriches tracks with Room favorite/offline state in a single SQLite query per chunk
+     * instead of N+1 individual queries, eliminating UI and background thread contention.
+     */
     private suspend fun enrichWithRoomState(tracks: List<Track>): List<Track> {
-        return tracks.map { track ->
-            val saved = runCatching { dao.getTrackById(track.id) }.getOrNull()
+        if (tracks.isEmpty()) return emptyList()
+        val savedMap = runCatching {
+            val map = HashMap<String, TrackEntity>(tracks.size)
+            tracks.map { it.id }.distinct().chunked(200).forEach { chunk ->
+                dao.getTracksByIds(chunk).forEach { entity ->
+                    map[entity.id] = entity
+                }
+            }
+            map
+        }.getOrDefault(emptyMap())
+
+        return tracks.map { raw ->
+            val track = sanitizeTrackForFullLength(raw)
+            val saved = savedMap[track.id]
             if (saved != null) {
                 track.copy(
                     isFavorite = saved.isFavorite,

@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /users/{userId}
+    // Document ID: {userId} (matches request.auth.uid)
+    // Fields:
+    //   - uid: string (required, immutable, matches userId)
+    //   - displayName: string (required, 1..80 chars)
+    //   - email: string (optional, <= 160 chars)
+    //   - photoUrl: string (optional, <= 1024 chars)
+    //   - selectedGenreIds: list of strings (optional, <= 60 items)
+    //   - selectedSubgenreIds: list of strings (optional, <= 120 items)
+    //   - selectedArtists: list of strings (optional, <= 200 items)
+    //   - likedAlbums: list of strings (optional, <= 200 items)
+    //   - preferredLanguages: list of strings (optional, <= 10 items)
+    //   - preferredEras: list of strings (optional, <= 10 items)
+    //   - discoveryBalance: string (optional, <= 40 chars)
+    //   - preferFullLengthTracks: bool (optional)
+    //   - autoAdaptFromCollection: bool (optional)
+    //   - updatedAt: int (required)
+    //
+    // Subcollection: /users/{userId}/likedTracks/{trackId}
+    // Fields:
+    //   - uid: string (required, matches userId)
+    //   - trackId: string (required, 1..200 chars)
+    //   - title: string (required, 1..300 chars)
+    //   - artist: string (required, 1..300 chars)
+    //   - album: string (optional, <= 300 chars)
+    //   - artworkUrl: string (optional, <= 2048 chars)
+    //   - streamUrl: string (required, 1..2048 chars)
+    //   - durationSec: int (optional, >= 0)
+    //   - provider: string (optional, <= 60 chars)
+    //   - genre: string (optional, <= 120 chars)
+    //   - releaseYear: string (optional, <= 20 chars)
+    //   - savedAt: int (required)
+    //
+    // Subcollection: /users/{userId}/playlists/{playlistKey}
+    // Fields:
+    //   - uid: string (required, matches userId)
+    //   - playlistKey: string (required, 1..120 chars)
+    //   - name: string (required, 1..160 chars)
+    //   - description: string (optional, <= 500 chars)
+    //   - tracksJson: string (required, <= 500000 chars)
+    //   - updatedAt: int (required)
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUserAccount(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'displayName', 'updatedAt'])
+        && data.uid is string
+        && data.uid == userId
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 80
+        && data.updatedAt is int
+        && (!('email' in data) || (data.email is string && data.email.size() <= 160))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1024))
+        && (!('selectedGenreIds' in data) || (data.selectedGenreIds is list && data.selectedGenreIds.size() <= 60))
+        && (!('selectedSubgenreIds' in data) || (data.selectedSubgenreIds is list && data.selectedSubgenreIds.size() <= 120))
+        && (!('selectedArtists' in data) || (data.selectedArtists is list && data.selectedArtists.size() <= 200))
+        && (!('likedAlbums' in data) || (data.likedAlbums is list && data.likedAlbums.size() <= 200));
+    }
+
+    function isValidCloudTrack(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'trackId', 'title', 'artist', 'streamUrl', 'savedAt'])
+        && data.uid is string
+        && data.uid == userId
+        && data.trackId is string
+        && data.trackId.size() >= 1
+        && data.trackId.size() <= 200
+        && data.title is string
+        && data.title.size() >= 1
+        && data.title.size() <= 300
+        && data.artist is string
+        && data.artist.size() >= 1
+        && data.artist.size() <= 300
+        && data.streamUrl is string
+        && data.streamUrl.size() >= 1
+        && data.streamUrl.size() <= 2048
+        && data.savedAt is int;
+    }
+
+    function isValidCloudPlaylist(userId) {
+      let data = request.resource.data;
+      return data.keys().hasAll(['uid', 'playlistKey', 'name', 'tracksJson', 'updatedAt'])
+        && data.uid is string
+        && data.uid == userId
+        && data.playlistKey is string
+        && data.playlistKey.size() >= 1
+        && data.playlistKey.size() <= 120
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 160
+        && data.tracksJson is string
+        && data.tracksJson.size() <= 500000
+        && data.updatedAt is int;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserAccount(userId);
+      allow update: if isOwner(userId) && isValidUserAccount(userId) && request.resource.data.uid == resource.data.uid;
+      allow delete: if isOwner(userId);
+
+      match /likedTracks/{trackId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidCloudTrack(userId);
+        allow update: if isOwner(userId) && isValidCloudTrack(userId) && request.resource.data.uid == resource.data.uid;
+        allow delete: if isOwner(userId);
+      }
+
+      match /playlists/{playlistKey} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidCloudPlaylist(userId);
+        allow update: if isOwner(userId) && isValidCloudPlaylist(userId) && request.resource.data.uid == resource.data.uid;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}
