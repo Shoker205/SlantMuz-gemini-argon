@@ -48,7 +48,14 @@ class CloudSyncRepository(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val auth: FirebaseAuth? = runCatching { Firebase.auth }.getOrNull()
-    private val firestore: FirebaseFirestore? = runCatching { Firebase.firestore }.getOrNull()
+    private val firestore: FirebaseFirestore? = runCatching {
+        val dbId = runCatching { context.getString(R.string.firestore_database_id) }.getOrNull()
+        if (!dbId.isNullOrBlank() && dbId != "(default)") {
+            Firebase.firestore(dbId)
+        } else {
+            Firebase.firestore
+        }
+    }.getOrNull()
 
     private val _accountState = MutableStateFlow(buildAccountStateFromUser(auth?.currentUser))
     val accountState: StateFlow<CloudAccountState> = _accountState.asStateFlow()

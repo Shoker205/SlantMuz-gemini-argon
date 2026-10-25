@@ -57,6 +57,66 @@ jobs:
             cp .env.example .env
           fi
 
+      - name: Prepare google-services.json
+        env:
+          GOOGLE_SERVICES_JSON_SECRET: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ ! -f app/google-services.json ]; then
+            if [ -n "$GOOGLE_SERVICES_JSON_SECRET" ]; then
+              echo "$GOOGLE_SERVICES_JSON_SECRET" > app/google-services.json
+            else
+              cat << 'EOF' > app/google-services.json
+          {
+            "project_info": {
+              "project_number": "407343525194",
+              "project_id": "gen-lang-client-0081314715",
+              "storage_bucket": "gen-lang-client-0081314715.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:407343525194:android:eface954d362c2fdcfa5b3",
+                  "android_client_info": {
+                    "package_name": "com.aistudio.slantmuz.vqxkpm"
+                  }
+                },
+                "oauth_client": [
+                  {
+                    "client_id": "407343525194-t6955ih8mnfgqcprrf2gj1l7m88uau34.apps.googleusercontent.com",
+                    "client_type": 1,
+                    "android_info": {
+                      "package_name": "com.aistudio.slantmuz.vqxkpm",
+                      "certificate_hash": "e9a6b56630d63f6c6afe61f2bcd02a494f9c450c"
+                    }
+                  },
+                  {
+                    "client_id": "407343525194-hl8192ddsn8h3gg65628revcphqtfbqc.apps.googleusercontent.com",
+                    "client_type": 3
+                  }
+                ],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyA66qD9bTGtxSS9wJFjhLs9s9qNEEEZlFE"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": [
+                      {
+                        "client_id": "407343525194-hl8192ddsn8h3gg65628revcphqtfbqc.apps.googleusercontent.com",
+                        "client_type": 3
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+            fi
+          fi
+
       - name: Prepare Keystores (Secrets or Auto-Generated Fallback)
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
